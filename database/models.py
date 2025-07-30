@@ -84,7 +84,7 @@ class PaymentRates(Base):
     support_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.user_id"), unique=True, nullable=False)
     technical_support: Mapped[int] = mapped_column(default=60)
     payment_support: Mapped[int] = mapped_column(default=30)
-    hwid_reset: Mapped[int] = mapped_column(default=40)
+    hwid_reset: Mapped[int] = mapped_column(default=30)
     get_key: Mapped[int] = mapped_column(default=100)
     reselling: Mapped[int] = mapped_column(default=30)
     bonus_per_50: Mapped[int] = mapped_column(default=1000)

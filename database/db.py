@@ -79,8 +79,7 @@ class DataBase:
     async def create_db(self):
         try:
             async with self.async_engine.begin() as conn:
-                # await conn.run_sync(Base.metadata.drop_all)
-                await conn.run_sync(Base.metadata.create_all)
+                #await conn.run_sync(Base.metadata.create_all)
                 await self.add_initial_db()
                 logger.info(Fore.BLUE + f'База данных создана(загружена)!' + Style.RESET_ALL)
         except Exception as e:

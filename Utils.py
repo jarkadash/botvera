@@ -90,7 +90,7 @@ async def filter_tickets_for_statistics(session, support_id: int, start_date: da
                 continue
 
             duration = ceil((ticket.completed_at - ticket.accept_at).total_seconds() / 60)
-            if duration < 10:
+            if duration < 5:
                 excluded.append((ticket, f'длительность {duration} мин < 5 мин'))
                 continue
 
