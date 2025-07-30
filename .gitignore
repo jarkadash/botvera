@@ -1,0 +1,4 @@
+### .ignore template
+/.venv/
+/.idea/
+/.env
