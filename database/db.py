@@ -713,7 +713,8 @@ class DataBase:
                     logger.warning(Fore.RED + f'Тикет {order_id} не найден!' + Style.RESET_ALL)
                     return False
                 order.status = 'closed'
-                order.accept_at = datetime.now()
+                if not order.accept_at:
+                    order.accept_at = datetime.now()
                 order.completed_at = datetime.now()
                 order.description = reason
                 await session.commit()
