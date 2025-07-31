@@ -782,7 +782,7 @@ class DataBase:
                     "HWID RESET": 0,
                     "Помощь с платежами / Payment Support": 0,
                     "Reselling": 0,
-                    "Получить ключ / Get a key": 0,
+                    "Получить Ключ / Get a key": 0,
                 }
 
                 for order in tickets:
@@ -1281,7 +1281,15 @@ class DataBase:
         row = result.scalar_one_or_none()
 
         if not row:
-            return {}  # Если запись не найдена, возвращаем пустой словарь
+            logger.warning(f"[RATES] Ставки не найдены для support_id={support_id}, применяем DEFAULT_RATES")
+            return {
+                "Техническая помощь / Technical Support": DEFAULT_RATES["technical_support"],
+                "HWID RESET": DEFAULT_RATES["hwid_reset"],
+                "Помощь с платежами / Payment Support": DEFAULT_RATES["payment_support"],
+                "Reselling": DEFAULT_RATES["reselling"],
+                "Получить Ключ / Get a key": DEFAULT_RATES["get_key"],
+                "Бонус": DEFAULT_RATES["bonus_per_50"]
+            }
 
         # Возвращаем словарь с названиями услуг и их ставками
         return {
@@ -1289,7 +1297,7 @@ class DataBase:
             "HWID RESET": row.hwid_reset,
             "Помощь с платежами / Payment Support": row.payment_support,
             "Reselling": row.reselling,
-            "Получить ключ / Get a key": row.get_key,
+            "Получить Ключ / Get a key": row.get_key,
             "Бонус": row.bonus_per_50
         }
 
@@ -1335,7 +1343,7 @@ class DataBase:
                     "HWID RESET": 0,
                     "Помощь с платежами / Payment Support": 0,
                     "Reselling": 0,
-                    "Получить ключ / Get a key": 0,
+                    "Получить Ключ / Get a key": 0,
                 }
 
                 # Перебираем тикеты и собираем статистику

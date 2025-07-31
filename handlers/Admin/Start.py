@@ -94,7 +94,7 @@ CATEGORY_MAP = {
     "payment_support": "Помощь с платежами / Payment Support",
     "hwid_reset": "HWID RESET",
     "reselling": "Reselling",
-    "get_key": "Получить ключ / Get a key",
+    "get_key": "Получить Ключ / Get a key",
     "bonus_per_50": "Бонус за каждые 50 тикетов"
 }
 

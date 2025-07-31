@@ -190,7 +190,7 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             f"⏳ Создана: {add_order['created_at']}\n\n"
             f"🔔 Пожалуйста, ожидайте ответа от администратора."
         )
-        excluded_usernames = ['jarkadash', 'afnskwb', 'Voldemort_1337' ]
+        excluded_usernames = ['jarkadash', 'afnskwb', 'Voldemort_1337', 'st3lland', 'MrMikita', 'GB_Support_Team']
         users = await db.get_user_role_id()
         if add_order['service_name'] == 'Получить Ключ / Get a key':
             admins = [user for user in users if user.role_id == 1 and user.username not in excluded_usernames]
@@ -203,7 +203,6 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
         logger.info(Fore.BLUE + f'{support_mentions}' + Style.RESET_ALL)
 
         message_send_support = (
-            f'За работу! {support_mentions}\n'
             f"📩 <b>Тикет</b> №{add_order['id']}\n"
             f"👤 <b>Пользователь:</b> @{add_order['client_name']}\n"
             f"🆔 <b>ID:</b> {add_order['client_id']}\n"
@@ -212,6 +211,7 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             f"🛠 <b>Услуга:</b> {add_order['service_name']}\n"
             f"ℹ️ <b>Статус:</b> <i>Новый</i>\n"
             f"⏳ <b>Создана:</b> {add_order['created_at']}\n\n"
+            f'{support_mentions}\n'
             f"⚡ <b>Нажмите 'Принять', чтобы взять Тикет в работу.</b>"
         )
 
