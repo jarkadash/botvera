@@ -355,7 +355,7 @@ async def close_ticket(order_id: int, client_id: int, bot: Bot, reason: str):
 async def auto_close_ticket_if_silent(order_id: int, client_id: int, bot: Bot):
     try:
         logger.info(f"[TIMER] Запущен таймер авто-закрытия тикета №{order_id}")
-        await asyncio.sleep(5)  # 2 минуты
+        await asyncio.sleep(119)  # 2 минуты
 
         # Проверка: тикет уже мог быть закрыт вручную
         order_info = await db.get_orders_by_id(order_id)
@@ -377,7 +377,7 @@ async def auto_close_ticket_if_silent(order_id: int, client_id: int, bot: Bot):
             await close_ticket(order_id, client_id, bot, reason)
             return  # дальше ничего делать не нужно
 
-        await asyncio.sleep(13)  # ещё 3 минуты
+        await asyncio.sleep(179)  # ещё 3 минуты
         # Повторная проверка: тикет уже мог быть закрыт вручную после предупреждения
         order_info = await db.get_orders_by_id(order_id)
         if not order_info or order_info.status == "closed":
