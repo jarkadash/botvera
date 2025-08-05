@@ -307,55 +307,65 @@ def format_ticket_closed_message(order, reason: str) -> str:
     )
 
 async def close_ticket(order_id: int, client_id: int, bot: Bot, reason: str):
-    await db.get_auto_close_order(order_id, reason=reason)
-    await redis_client.delete(f"ticket:{client_id}")
-    await redis_client.delete(f"chat:{client_id}")
-    await redis_client.delete(f"role:{client_id}")
-    await redis_client.delete(f"messages:{order_id}")
-
-    order_info = await db.get_orders_by_id(order_id)
-    if not order_info:
-        logger.warning(f"[TIMER] Не найден тикет №{order_id} для уведомлений")
-        return
-
-    logger.info(f"[TIMER] Тикет №{order_id} закрыт автоматически: {reason}")
-
-    # Обновляем сообщение в группе
-    message_info = await db.get_all_message(order_id)
-    if message_info:
-        message_edit_text = format_ticket_closed_message(order_info, reason)
-        await bot.edit_message_text(
-            message_id=int(message_info.support_message_id),
-            chat_id=GROUP_CHAT_ID,
-            text=message_edit_text,
-            parse_mode="HTML"
-        )
-        await unpin_specific_message(bot, GROUP_CHAT_ID, int(message_info.support_message_id))
-
-    # Уведомляем саппорта
     try:
-        await bot.send_message(
-            chat_id=order_info.support_id,
-            text=f"🚪 Тикет №{order_id} закрыт автоматически. {reason}"
-        )
-    except TelegramForbiddenError:
-        pass
+        await db.get_auto_close_order(order_id, reason=reason)
 
-    # Уведомляем клиента (только если не заблокировал)
-    if reason == "Авто-закрытие (Клиент не ответил)":
+        order_info = await db.get_orders_by_id(order_id)
+        if not order_info:
+            logger.warning(f"[TIMER] Не найден тикет №{order_id} для уведомлений")
+            return
+
+        # ✅ Чистим все связанные Redis-ключи
+        await redis_client.delete(f"ticket:{order_info.client_id}")
+        await redis_client.delete(f'chat:{order_info.client_id}')
+        await redis_client.delete(f"role:{order_info.client_id}")
+        await redis_client.delete(f"messages:{order_id}")
+        await redis_client.delete(f"ticket:{order_info.support_id}")
+        await redis_client.delete(f'chat:{order_info.support_id}')
+        await redis_client.delete(f"role:{order_info.support_id}")
+
+        logger.info(f"[TIMER] Тикет №{order_id} закрыт автоматически: {reason}")
+
+        # Обновляем сообщение в группе
+        message_info = await db.get_all_message(order_id)
+        if message_info:
+            message_edit_text = format_ticket_closed_message(order_info, reason)
+            await bot.edit_message_text(
+                message_id=int(message_info.support_message_id),
+                chat_id=GROUP_CHAT_ID,
+                text=message_edit_text,
+                parse_mode="HTML"
+            )
+            await unpin_specific_message(bot, GROUP_CHAT_ID, int(message_info.support_message_id))
+
+        # Уведомляем support'а
         try:
             await bot.send_message(
-                chat_id=client_id,
-                text=f"⛔️ Тикет №{order_id} был закрыт автоматически из-за отсутствия ответа. Вы можете создать новый, если помощь всё ещё нужна."
+                chat_id=order_info.support_id,
+                text=f"🚪 Тикет №{order_id} закрыт автоматически. {reason}"
             )
         except TelegramForbiddenError:
-            logger.warning(f"[TIMER] Клиент заблокировал бота к моменту уведомления по тикету №{order_id}")
+            logger.warning(f"[TIMER] Support заблокировал бота — уведомление не отправлено")
+
+        # Уведомляем клиента (если не заблокировал)
+        if reason == "Авто-закрытие (Клиент не ответил)":
+            try:
+                await bot.send_message(
+                    chat_id=client_id,
+                    text=f"⛔️ Тикет №{order_id} был закрыт автоматически из-за отсутствия ответа. Вы можете создать новый, если помощь всё ещё нужна."
+                )
+            except TelegramForbiddenError:
+                logger.warning(f"[TIMER] Клиент заблокировал бота — уведомление не отправлено")
+
+    except Exception as e:
+        logger.error(f"[CLOSE ERROR] Ошибка при закрытии тикета №{order_id}: {e}")
+
 
 
 async def auto_close_ticket_if_silent(order_id: int, client_id: int, bot: Bot):
     try:
         logger.info(f"[TIMER] Запущен таймер авто-закрытия тикета №{order_id}")
-        await asyncio.sleep(119)  # 2 минуты
+        await asyncio.sleep(7 )  # 2 минуты
 
         # Проверка: тикет уже мог быть закрыт вручную
         order_info = await db.get_orders_by_id(order_id)
@@ -377,7 +387,7 @@ async def auto_close_ticket_if_silent(order_id: int, client_id: int, bot: Bot):
             await close_ticket(order_id, client_id, bot, reason)
             return  # дальше ничего делать не нужно
 
-        await asyncio.sleep(179)  # ещё 3 минуты
+        await asyncio.sleep(5)  # ещё 3 минуты
         # Повторная проверка: тикет уже мог быть закрыт вручную после предупреждения
         order_info = await db.get_orders_by_id(order_id)
         if not order_info or order_info.status == "closed":
