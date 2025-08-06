@@ -15,9 +15,27 @@ from logger import logger
 from core.dictionary import *
 from handlers.User.keyboard.replykeqyboard import *
 from config import *
+from aiogram.filters import Filter
+from sqlalchemy import select
+from database.models import Roles, Users
+import pandas as pd
+
+
 db = DataBase()
 active_timers = {}  # order_id: asyncio.Task
 worker_router = Router()
+
+class IsSupportOrAdmin(Filter):
+    async def __call__(self, message: Message) -> bool:
+        async with db.Session() as session:
+            result = await session.execute(
+                select(Roles.role_name)
+                .join(Users, Users.role_id == Roles.id)
+                .where(Users.user_id == message.from_user.id)
+            )
+            role_name = result.scalar_one_or_none()
+            return role_name in ["admin", "support"]
+
 class TicketState(StatesGroup):
     waiting_for_response = State()
 
@@ -229,7 +247,7 @@ async def handle_ticket_response(message: Message, state: FSMContext, bot: Bot):
         await state.clear()
 
 
-@worker_router.message(Command(commands='statistics'))
+@worker_router.message(Command(commands='statistics'), IsSupportOrAdmin())
 async def handle_statistics(message: Message, state: FSMContext):
     logger.info(
         Fore.BLUE + f"Пользователь {message.from_user.username} id: {message.from_user.id} просит статистику" + Style.RESET_ALL
@@ -240,50 +258,101 @@ async def handle_statistics(message: Message, state: FSMContext):
         start_date, end_date = get_calculated_period()
         logger.info(f"Период для статистики: {start_date} – {end_date}")
 
-        # Проверка роли
-        user = await db.check_role(int(message.from_user.id))
-        if not user:
-            await message.answer("У вас нет доступа к статистике.")
-            return
-
-        # Открываем сессию и фильтруем тикеты
         async with db.Session() as session:
-            filtered_orders, excluded_orders = await filter_tickets_for_statistics(
+            included, excluded = await filter_tickets_for_statistics(
                 session, message.from_user.id, start_date, end_date
             )
 
-        # Получаем агрегированную статистику
-        statistics = await db.statistics_user_by_id(message.from_user.id, start_date, end_date)
+            # Построим DataFrame
+            def ticket_to_row(ticket, excluded_reason=None):
+                return {
+                    "id": ticket.id,
+                    "client_id": ticket.client_id,
+                    "client_name": ticket.client_name,
+                    "support_id": ticket.support_id,
+                    "support_name": ticket.support_name,
+                    "service_id": ticket.service_id,
+                    "service_name": ticket.service_name,
+                    "created_at": ticket.created_at,
+                    "accept_at": ticket.accept_at,
+                    "completed_at": ticket.completed_at,
+                    "status": ticket.status,
+                    "stars": ticket.stars,
+                    "description": ticket.description,
+                    "excluded_reason": excluded_reason
+                }
 
-        if not statistics or "error" in statistics:
-            await message.answer("Ошибка при получении статистики или статистика отсутствует.")
-            return
+            all_rows = []
+            for ticket in included:
+                all_rows.append(ticket_to_row(ticket))
+            for ticket, reason in excluded:
+                all_rows.append(ticket_to_row(ticket, excluded_reason=reason))
 
-        # Формируем текст статистики
-        avg_rating = statistics.get("avg_rating", 0)
-        stars = f"{avg_rating:.2f}" if avg_rating > 0 else 'статистика будет доступна после 10 тикетов!'
+            df = pd.DataFrame(all_rows)
 
-        minutes, seconds = divmod(statistics['avg_response_time'], 60)
-        estimated_salary = statistics.get("estimated_salary", 0)
-        salary_line = f"💰 Предполагаемая ЗП: {estimated_salary:,} руб.".replace(',', ' ') if estimated_salary else ""
+            # Оставим только учтённые тикеты
+            filtered_df = df[
+                (df["excluded_reason"].isnull()) |
+                (df["excluded_reason"].astype(str).str.strip() == "")
+            ]
 
-        message_text = (
-            f"📊 Статистика пользователя @{message.from_user.username}\n\n"
-            f"🟢 Всего тикетов: {statistics.get('all_orders', 0)}\n"
-            f"—————————\n"
-            f"📆 За период {start_date.strftime('%d.%m.%y')} – {end_date.strftime('%d.%m.%y')}\n"
-            f"✅ Тикетов: {statistics.get('orders_this_month', 0)}\n"
-            f"⭐️ Рейтинг: {stars}\n"
-            f"⏳ Время обработки: {minutes:02}.{seconds:02} минут\n"
-            f"{salary_line}"
-        )
+            total = len(filtered_df)
 
-        await message.answer(message_text)
-        logger.info(Fore.BLUE + f"Статистика отправлена:\n{message_text}" + Style.RESET_ALL)
+            # Средняя оценка
+            stars_col = filtered_df["stars"].dropna()
+            avg_rating = stars_col.mean() if not stars_col.empty else 0
+
+            # Среднее время ответа
+            time_deltas = filtered_df.dropna(subset=["accept_at", "completed_at"])
+            time_deltas["duration_sec"] = (time_deltas["completed_at"] - time_deltas["accept_at"]).dt.total_seconds()
+            avg_response_time = int(time_deltas["duration_sec"].mean()) if not time_deltas.empty else 0
+
+            # Получаем ставки
+            rates = await db.get_user_rates(session, message.from_user.id)
+
+            counts = filtered_df["service_name"].value_counts().to_dict()
+
+            salary = 0
+            for service, count in counts.items():
+                rate = rates.get(service, 0)
+                if service == "Техническая помощь / Technical Support" and message.from_user.id == 434791099 and rate < 80:
+                    rate = 80
+                salary += count * rate
+
+            bonus = rates.get("Бонус", 0)
+            if bonus and total >= 50:
+                salary += (total // 50) * bonus
+
+            # Получаем агрегированную статистику
+            statistics = await db.statistics_user_by_id(message.from_user.id, start_date, end_date)
+
+            if not statistics or "error" in statistics:
+                await message.answer("Ошибка при получении статистики или статистика отсутствует.")
+                return
+
+            # Формируем сообщение
+            minutes, seconds = divmod(avg_response_time, 60)
+            stars = f"{avg_rating:.2f}" if avg_rating > 0 else 'статистика будет доступна после 10 тикетов!'
+            salary_line = f"💰 Предполагаемая ЗП: {salary:,} руб.".replace(",", " ") if salary else ""
+
+            message_text = (
+                f"📊 Статистика пользователя @{message.from_user.username}\n\n"
+                f"🟢 Всего тикетов: {statistics.get('all_orders', 0)}\n"
+                f"—————————\n"
+                f"📆 За период {start_date.strftime('%d.%m.%y')} – {end_date.strftime('%d.%m.%y')}\n"
+                f"✅ Тикетов: {total}\n"
+                f"⭐️ Рейтинг: {stars}\n"
+                f"⏳ Время обработки: {minutes:02}.{seconds:02} минут\n"
+                f"{salary_line}"
+            )
+
+            await message.answer(message_text)
+            logger.info(Fore.BLUE + f"Статистика отправлена:\n{message_text}" + Style.RESET_ALL)
 
     except Exception as e:
-        logger.error(f"[ERROR] Ошибка при расчете статистики: {e}")
+        logger.error(f"[ERROR] Ошибка при расчете статистики: {e}", exc_info=True)
         await message.answer("Произошла внутренняя ошибка при расчёте статистики.")
+
 
 
 def format_ticket_closed_message(order, reason: str) -> str:
@@ -365,7 +434,7 @@ async def close_ticket(order_id: int, client_id: int, bot: Bot, reason: str):
 async def auto_close_ticket_if_silent(order_id: int, client_id: int, bot: Bot):
     try:
         logger.info(f"[TIMER] Запущен таймер авто-закрытия тикета №{order_id}")
-        await asyncio.sleep(7 )  # 2 минуты
+        await asyncio.sleep(119)  # 2 минуты
 
         # Проверка: тикет уже мог быть закрыт вручную
         order_info = await db.get_orders_by_id(order_id)
@@ -387,7 +456,7 @@ async def auto_close_ticket_if_silent(order_id: int, client_id: int, bot: Bot):
             await close_ticket(order_id, client_id, bot, reason)
             return  # дальше ничего делать не нужно
 
-        await asyncio.sleep(5)  # ещё 3 минуты
+        await asyncio.sleep(179)  # ещё 3 минуты
         # Повторная проверка: тикет уже мог быть закрыт вручную после предупреждения
         order_info = await db.get_orders_by_id(order_id)
         if not order_info or order_info.status == "closed":

@@ -12,6 +12,7 @@ from datetime import datetime
 from math import floor
 from database.db import DataBase
 from colorama import Fore, Style
+from aiogram.enums.parse_mode import ParseMode
 from logger import logger
 from core.dictionary import *
 from handlers.Admin.keyboard.InlineKb import *
@@ -506,66 +507,146 @@ async def start_export(call: CallbackQuery, state: FSMContext, bot: Bot):
     await call.message.delete()
     await export_data(call, bot)
 
+# --- Кнопки подтверждения ---
+confirm_mailing_kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Начать рассылку", callback_data="confirm_real_send")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_mailing")]
+    ]
+)
+# Админ нажал "Начать рассылку"
 @admin_router.callback_query(F.data.startswith('malling_message'))
 async def start_mailing(call: CallbackQuery, state: FSMContext, bot: Bot):
-    logger.info(Fore.BLUE + f'Пользователь {call.from_user.username} id: {call.from_user.id} '
-                            f'начал рассылку' + Style.RESET_ALL)
+    logger.info(Fore.BLUE + f'Пользователь {call.from_user.username} id: {call.from_user.id} хочет начать рассылку' + Style.RESET_ALL)
 
-    await call.message.delete()
-    await call.message.answer(text='Пришлите мне готовое сообщение для рассылки:')
+    # 🧹 Очистим FSM
+    await state.clear()
+
+    # 🧼 Попробуем удалить последние 5 сообщений (где могли быть кнопки)
+    for msg_id in range(call.message.message_id - 1, call.message.message_id - 6, -1):
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=call.message.chat.id,
+                message_id=msg_id,
+                reply_markup=None
+            )
+        except Exception:
+            pass  # Игнорируем ошибки если сообщение уже не редактируется
+
+    # 🧼 Удалим текущие кнопки
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.warning(f"Не удалось удалить клавиатуру текущего сообщения: {e}")
+
+    # ✉️ Запрос сообщения
+    await call.message.answer("✉️ Пришли сообщение, которое хочешь разослать:")
     await state.set_state(StartMailing.text_mailing)
 
 
+
+# Получено сообщение, ждём подтверждения
 @admin_router.message(StartMailing.text_mailing)
-async def start_mailing(message: Message, state: FSMContext, bot: Bot):
-    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} начал рассылку' + Style.RESET_ALL)
+async def receive_mailing_text(message: Message, state: FSMContext, bot):
+    await state.update_data(message_id=message.message_id, chat_id=message.chat.id)
+    await message.answer("\u2705 Сообщение получено. Начинаем рассылку?", reply_markup=confirm_mailing_kb)
+
+    user = message.from_user
+    await bot.send_message(
+        434791099,
+        f"\u2139\ufe0f Пользователь @{user.username or 'без username'} (id: {user.id}) отправил сообщение для рассылки и ожидает подтверждения."
+    )
+
+# Подтверждена рассылка
+@admin_router.callback_query(F.data == "confirm_real_send")
+async def do_real_mailing(call: CallbackQuery, state: FSMContext, bot):
+    # ⬇ Удаляем кнопки подтверждения сразу
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.warning(f"Не удалось удалить кнопки подтверждения: {e}")
+    data = await state.get_data()
+    message_id = data.get("message_id")
+    from_chat_id = data.get("chat_id")
+
+    # 🛡️ Проверка на наличие данных перед запуском
+    if not message_id or not from_chat_id:
+        await call.message.edit_text(
+            "❌ Ошибка: не удалось найти сообщение для рассылки. "
+            "Возможно, вы вызвали меню повторно или состояние было сброшено.\n"
+            "Попробуйте начать заново."
+        )
+        await state.clear()
+        return
+
+    await state.clear()
 
     users = await db.get_user_all()
     user_ids = [user.user_id for user in users]
 
     if not user_ids:
-        await message.answer("❌ Нет пользователей для рассылки!")
-        await state.clear()
+        await call.message.edit_text("❌ Нет пользователей для рассылки!")
         return
+
+    await bot.send_message(
+        434791099,
+        f"⚠ Пользователь @{call.from_user.username or 'без username'} (id: {call.from_user.id}) подтвердил рассылку. Начинаем отправку..."
+    )
 
     success = 0
     errors = 0
     total = len(user_ids)
 
-    progress = await message.answer(f"📤 Прогресс: 0/{total}")
+    progress = await call.message.answer(f"⌛  Прогресс: 0/{total}")
 
     for index, user_id in enumerate(user_ids, 1):
         try:
             await bot.copy_message(
                 chat_id=user_id,
-                from_chat_id=message.chat.id,
-                message_id=message.message_id
+                from_chat_id=from_chat_id,
+                message_id=message_id
             )
             success += 1
         except Exception as e:
             if "Too Many Requests" in str(e):
-                # Лимит запросов - ждем 10 секунд
-                await progress.edit_text(f"⚠️ Лимит! Ждем 10 сек...")
+                await progress.edit_text("(⚠ Лимит! Ждём 10 сек...")
                 await asyncio.sleep(10)
                 continue
             errors += 1
             logger.error(f"Ошибка {user_id}: {e}")
 
-        # Обновляем прогресс каждые 10 пользователей
         if index % 10 == 0:
-            await progress.edit_text(f"📤 Прогресс: {index}/{total}")
+            await progress.edit_text(f"⌛ Прогресс: {index}/{total}")
 
-        # Базовая задержка 0.1 сек (10 сообщений/сек)
         await asyncio.sleep(0.1)
 
     await progress.delete()
-    await message.answer(
-        f"✅ Рассылка завершена!\n"
-        f"▪ Успешно: {success}\n"
-        f"▪ Ошибок: {errors}\n"
-        f"▪ Всего: {total}"
+    await call.message.answer(
+        f"✅ Рассылка завершена!\n\n"
+        f"✅ Успешно: {success}\n"
+        f"❌ Ошибок: {errors}\n\n"
+        f"⚠ Всего: {total}"
     )
+
+    await bot.send_message(
+        434791099,
+        f"✅ Рассылка завершена.\n\n"
+        f"✉ Отправитель: @{call.from_user.username or 'без username'} ({call.from_user.id})"
+    )
+
+# Отменена рассылка
+@admin_router.callback_query(F.data == "cancel_mailing")
+async def cancel_mailing(call: CallbackQuery, state: FSMContext):
+    # ⬇ Удаляем кнопки
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.warning(f"Не удалось удалить кнопки отмены: {e}")
+
     await state.clear()
+    await call.message.edit_text("❌ Рассылка отменена.")
+
+
 
 
 @admin_router.callback_query(F.data.startswith('start_media'))
@@ -696,7 +777,6 @@ async def all_stats_command(message: Message, bot: Bot):
     try:
         parts = message.text.strip().split(" ")
 
-        # Если нет диапазона дат — показываем пример и используем расчётный период
         if len(parts) == 1:
             await message.answer("📅 Укажите диапазон в формате:\n`/allstats 11.07.25–25.07.25`", parse_mode="Markdown")
             start_date, end_date = get_calculated_period()
@@ -707,67 +787,21 @@ async def all_stats_command(message: Message, bot: Bot):
         else:
             await message.answer("❗ Формат: /allstats ДД.ММ.ГГ–ДД.ММ.ГГ")
             return
+
         user = message.from_user
         await bot.send_message(
             434791099,
             f"ℹ️ Пользователь @{user.username or 'без username'} (id: {user.id}) воспользовался командой /allstats"
         )
 
-        # Получаем всех сотрудников с ролями support/admin
         users = await db.get_users_with_roles_for_rates()
         if not users:
             await message.answer("Нет сотрудников с ролью support/admin.")
             return
 
         from Utils import filter_tickets_for_statistics
-        from Utils import order_to_dict
 
         text = f"📊 Статистика с {start_date.strftime('%d.%m.%Y')} по {end_date.strftime('%d.%m.%Y')}\n\n"
-
-        async with db.Session() as session:
-            for row in users:
-                user_id = row[0]
-                username = row[1] or "без username"
-
-                included, _ = await filter_tickets_for_statistics(session, user_id, start_date, end_date)
-                if not included:
-                    continue
-
-                counts = {}
-                for ticket in included:
-                    counts[ticket.service_name] = counts.get(ticket.service_name, 0) + 1
-
-                rates = await db.get_user_rates(session, user_id)
-                salary = 0
-                total = sum(counts.values())
-
-                for service, count in counts.items():
-                    rate = rates.get(service, 0)
-
-                    if service == "Техническая помощь / Technical Support" and user_id == 434791099 and rate < 80:
-                        rate = 80
-
-                    salary += count * rate
-
-                bonus = rates.get("Бонус", 0)
-                if bonus and total >= 50:
-                    salary += floor(total / 50) * bonus
-
-                CATEGORY_ORDER = {
-                    "Техническая помощь / Technical Support": "Техническая помощь",
-                    "Помощь с платежами / Payment Support": "Помощь с платежами",
-                    "HWID RESET": "HWID reset",
-                    "Reselling": "Reselling",
-                    "Получить Ключ / Get a key": "Выдача ключей"
-                }
-
-                text += f"👨‍💻 @{username}:\n"
-                for category in CATEGORY_ORDER:
-                    if category in counts:
-                        text += f"- {CATEGORY_ORDER[category]}: {counts[category]}\n"
-                text += f"🧾 Всего: {total}\n"
-                formatted_salary = f"{salary:,.0f}".replace(",", " ")
-                text += f"💰 Заработал: {formatted_salary} руб.\n\n"
 
         all_ticket_rows = []
 
@@ -801,9 +835,59 @@ async def all_stats_command(message: Message, bot: Bot):
                 for ticket, reason in excluded:
                     all_ticket_rows.append(ticket_to_row(ticket, excluded_reason=reason))
 
-        if ( message.from_user.id == 434791099 and message.chat.type == "private" and all_ticket_rows ):
-            df = pd.DataFrame(all_ticket_rows)
+        df = pd.DataFrame(all_ticket_rows)
 
+        CATEGORY_ORDER = {
+            "Техническая помощь / Technical Support": "Техническая помощь",
+            "Помощь с платежами / Payment Support": "Помощь с платежами",
+            "HWID RESET": "HWID reset",
+            "Reselling": "Reselling",
+            "Получить Ключ / Get a key": "Выдача ключей"
+        }
+
+        async with db.Session() as session:
+            for row in users:
+                user_id = row[0]
+                username = row[1] or "без username"
+
+                user_df = df[
+                    (df["support_id"] == user_id) &
+                    (
+                            (df["excluded_reason"].isnull()) |
+                            (df["excluded_reason"].astype(str).str.strip() == "")
+                    )
+                    ]
+
+                if user_df.empty:
+                    continue
+
+                counts = user_df["service_name"].value_counts().to_dict()
+
+                rates = await db.get_user_rates(session, user_id)
+                salary = 0
+                total = sum(counts.values())
+
+                for service, count in counts.items():
+                    rate = rates.get(service, 0)
+
+                    if service == "Техническая помощь / Technical Support" and user_id == 434791099 and rate < 80:
+                        rate = 80
+
+                    salary += count * rate
+
+                bonus = rates.get("Бонус", 0)
+                if bonus and total >= 50:
+                    salary += floor(total / 50) * bonus
+
+                text += f"👨‍💻 @{username}:\n"
+                for category in CATEGORY_ORDER:
+                    if category in counts:
+                        text += f"- {CATEGORY_ORDER[category]}: {counts[category]}\n"
+                text += f"🧾 Всего: {total}\n"
+                formatted_salary = f"{salary:,.0f}".replace(",", " ")
+                text += f"💰 Заработал: {formatted_salary} руб.\n\n"
+
+        if message.from_user.id == 434791099 and message.chat.type == "private" and not df.empty:
             filename = f"Отчет_allstats_{start_date.strftime('%d.%m.%y')}_{end_date.strftime('%d.%m.%y')}.xlsx"
             df.to_excel(filename, index=False)
 
@@ -844,8 +928,8 @@ async def all_stats_command(message: Message, bot: Bot):
                 reason_parts.append(f"user_id ≠ A ({message.from_user.id})")
             if message.chat.type != "private":
                 reason_parts.append(f"chat_type ≠ private ({message.chat.type})")
-            if not all_ticket_rows:
-                reason_parts.append("нет данных (all_ticket_rows пуст)")
+            if df.empty:
+                reason_parts.append("нет данных (df пуст)")
             logger.info("[ALLSTATS] Excel-файл не создан: " + "; ".join(reason_parts))
 
         await message.answer(text.strip())

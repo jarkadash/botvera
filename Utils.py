@@ -11,6 +11,19 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from logger import logger
 
 
+def is_auto_closed(ticket) -> bool:
+    """
+    Проверяет, является ли тикет автоматически закрытым по причинам
+    авто-закрытия бота или молчания.
+    """
+    if not ticket.description:
+        return False
+    description = ticket.description.strip()
+    return any(reason in description for reason in [
+        "Авто-закрытие (Заблокировал бота)",
+        "Авто-закрытие (Клиент не ответил)"
+    ])
+
 def get_calculated_period(today=None):
     if today is None:
         today = datetime.now()
@@ -45,7 +58,7 @@ def order_to_dict(order) -> dict:
         "deleted": getattr(order, "deleted", None),
     }
 
-async def filter_tickets_for_statistics(session, support_id: int, start_date: datetime, end_date: datetime) -> Tuple[list, list]:
+async def filter_tickets_for_statistics(session, support_id: int, start_date: datetime.date, end_date: datetime.date):
     start_dt = datetime.combine(start_date, datetime.min.time())
     end_dt = datetime.combine(end_date, datetime.max.time())
 
@@ -73,6 +86,10 @@ async def filter_tickets_for_statistics(session, support_id: int, start_date: da
             excluded.append((ticket, 'support_id пустой'))
             continue
 
+        if is_auto_closed(ticket):
+            excluded.append((ticket, 'автоматически закрыт'))
+            continue
+
         if ticket.service_name == "Техническая помощь / Technical Support":
             key = (ticket.support_id, ticket.client_id, ticket.created_at.date())
             if key not in technical_seen:
@@ -84,20 +101,29 @@ async def filter_tickets_for_statistics(session, support_id: int, start_date: da
 
     for key, tickets in technical_seen.items():
         sorted_tickets = sorted(tickets, key=lambda t: t.created_at)
-        for i, ticket in enumerate(sorted_tickets):
+
+        valid_tickets = []
+        for ticket in sorted_tickets:
+            if is_auto_closed(ticket):
+                excluded.append((ticket, 'автоматически закрыт (бот/молчание)'))
+                continue
             if not ticket.accept_at or not ticket.completed_at:
                 excluded.append((ticket, 'нет времени выполнения'))
                 continue
-
             duration = ceil((ticket.completed_at - ticket.accept_at).total_seconds() / 60)
             if duration < 5:
                 excluded.append((ticket, f'длительность {duration} мин < 5 мин'))
                 continue
+            valid_tickets.append(ticket)
 
+        for i, ticket in enumerate(valid_tickets):
             if i == 1:
-                excluded.append((ticket, 'второй тикет в день — пересозданный'))
+                excluded.append((ticket, 'пересозданный'))
             else:
                 included.append(ticket)
+
+    # Финальная лог-защита
+    logger.info(f"[FILTER FINAL] support_id={support_id} => included={len(included)} excluded={len(excluded)}")
 
     return included, excluded
 
