@@ -2,4 +2,4 @@
 /.venv/
 /.idea/
 /.env
-/alembic/versions/
+/app.log/
