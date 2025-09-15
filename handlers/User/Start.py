@@ -177,16 +177,12 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             f"• До 60 минут в прайм-тайм\n"
             f"• До 30 минут в остальное время\n\n"
         )
-        reply_markup_client_buttons = [[InlineKeyboardButton(text="🗑 Отменить", callback_data=f"remove_order:{add_order['id']}")]]
-        if add_order['service_name'] == 'Техническая помощь / Technical Support':
-            message_send_user += (
-                "Приоритетная поддержка нацелена на максимальную скорость в решении любых проблем пользователя с нашими продуктами.\n\n"
-                "После оплаты Вы будете добавлены в беседу, где Вы сможете обратиться напрямую к агенту поддержки и получить помощь немедленно.\n"
-            )
-            reply_markup_client_buttons.append(
-                [InlineKeyboardButton(text="🚀 Приоритетная поддержка", url="https://oplata.info/asp2/pay_wm.asp?id_d=5423227&lang=ru-RU")]
-            )
-        keyboard_client = InlineKeyboardMarkup(inline_keyboard=reply_markup_client_buttons)
+        # Клавиатура клиента: только «Отменить»
+        keyboard_client = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🗑 Отменить", callback_data=f"remove_order:{add_order['id']}")]
+            ]
+        )
         excluded_usernames = ['jarkadash', 'afnskwb', 'Voldemort_1337', 'st3lland', 'MrMikita', 'GB_Support_Team']
         users = await db.get_user_role_id()
         if add_order['service_name'] == 'Получить Ключ / Get a key':
