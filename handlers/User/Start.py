@@ -177,9 +177,17 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
                 "Спасибо за понимание! 💙"
             )
 
-        service_id = int(call.data.split('_')[1])
-        user_id = call.from_user.id
-        add_order = await db.add_orders(service_id, user_id)
+			service_id = int(call.data.split('_')[1])
+			user_id = call.from_user.id
+			services_all = await db.get_services()
+			service_obj = next((s for s in services_all if s.id == int(call.data.split('_')[1])), None)
+			if service_obj and service_obj.service_name == 'Техническая помощь / Technical Support':
+			    cnt = await db.count_user_service_requests_today(call.from_user.id, service_obj.service_name)
+			    if cnt >= 2:
+			        await call.message.answer('Вы уже отправили 2 обращения в техническую поддержку за текущие сутки. Новое обращение будет доступно завтра.')
+			        return
+			add_order = await db.add_orders(service_id, user_id)
+
 
         if add_order == 'Active-Ticket':
             await call.message.answer(f'У вас уже есть активный тикет')
