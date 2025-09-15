@@ -1,5 +1,8 @@
-### .ignore template
 /.venv/
 /.idea/
 /.env
 /app.log/
+*.log
+.env.*
+meyenv/
+__pycache__/

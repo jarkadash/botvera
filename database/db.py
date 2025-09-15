@@ -2,7 +2,7 @@ import asyncio
 import time
 import pytz
 from dotenv import load_dotenv
-from sqlalchemy import select, delete, update
+from sqlalchemy import select, delete, update, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
@@ -17,8 +17,6 @@ from colorama import Fore, Style
 import os
 from datetime import datetime, timedelta
 from sqlalchemy import text
-
-# Подключаемся к Redis
 
 
 load_dotenv()
@@ -169,6 +167,30 @@ class DataBase:
                 await session.rollback()
                 raise
                 return f'Ошибка при получении услуг: {e}'
+            finally:
+                await session.close()
+
+    async def count_user_service_requests_today(self, user_id: int, service_name: str):
+        async with self.Session() as session:
+            try:
+                tz = pytz.timezone('Europe/Moscow')
+                now_msk = datetime.now(tz)
+                start_msk = now_msk.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_msk = start_msk + timedelta(days=1)
+                start_utc = start_msk.astimezone(pytz.utc)
+                end_utc = end_msk.astimezone(pytz.utc)
+                result = await session.execute(
+                    select(func.count(Orders.id)).where(
+                        Orders.client_id == user_id,
+                        Orders.service_name == service_name,
+                        Orders.created_at >= start_utc,
+                        Orders.created_at < end_utc
+                    )
+                )
+                return int(result.scalar() or 0)
+            except Exception:
+                await session.rollback()
+                raise
             finally:
                 await session.close()
 
