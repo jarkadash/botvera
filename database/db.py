@@ -177,22 +177,21 @@ class DataBase:
                 now_msk = datetime.now(tz)
                 start_msk = now_msk.replace(hour=0, minute=0, second=0, microsecond=0)
                 end_msk = start_msk + timedelta(days=1)
-                start_utc = start_msk.astimezone(pytz.utc)
-                end_utc = end_msk.astimezone(pytz.utc)
+                start_utc_naive = start_msk.astimezone(pytz.utc).replace(tzinfo=None)
+                end_utc_naive = end_msk.astimezone(pytz.utc).replace(tzinfo=None)
+
                 result = await session.execute(
                     select(func.count(Orders.id)).where(
                         Orders.client_id == user_id,
                         Orders.service_name == service_name,
-                        Orders.created_at >= start_utc,
-                        Orders.created_at < end_utc
+                        Orders.created_at >= start_utc_naive,
+                        Orders.created_at < end_utc_naive
                     )
                 )
                 return int(result.scalar() or 0)
-            except Exception:
-                await session.rollback()
-                raise
             finally:
                 await session.close()
+
 
     async def get_banned_users(self, user_id):
         async with self.Session() as session:
