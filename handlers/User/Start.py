@@ -23,16 +23,13 @@ TIMEOUT = 600
 class StarsOrder(StatesGroup):
     stars_order = State()
 
-
 def is_restricted_time() -> bool:
     now = datetime.now().time()
-    return now.hour < 11 or now.hour >= 23  # До 11:00 или после 23:00
-
+    return now.hour < 11 or now.hour >= 23
 
 @start_router.message(Command(commands='start'), F.chat.type == "private")
 async def start(message: Message, state: FSMContext, bot: Bot):
-    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} '
-                            f'Ввел команду "start"' + Style.RESET_ALL)
+    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} Ввел команду "start"' + Style.RESET_ALL)
     await state.clear()
     if is_restricted_time():
         await message.answer(
@@ -56,13 +53,10 @@ async def start(message: Message, state: FSMContext, bot: Bot):
             "После этого вы сможете воспользоваться ботом! 🚀"
         )
         return
-
     result = await db.get_user(message.from_user.id, username)
-
     if result == 'Banned':
         await message.delete()
-        logger.info(
-            Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} в черном списке' + Style.RESET_ALL)
+        logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} в черном списке' + Style.RESET_ALL)
         return
     elif result == 'admin':
         await message.answer('Добро пожаловать, мой хозяин', reply_markup=start_menu)
@@ -75,14 +69,12 @@ async def start(message: Message, state: FSMContext, bot: Bot):
     else:
         await message.answer(f'Ошибка попробуйте позже')
 
-
 @start_router.message(F.text == '📋 Меню')
 async def open_menu(message: Message, state: FSMContext):
     result = await db.get_banned_users(message.from_user.id)
     if result is True:
         await message.delete()
         return
-
     username = message.from_user.username
     if username is None:
         await message.answer(
@@ -95,25 +87,18 @@ async def open_menu(message: Message, state: FSMContext):
             "После этого вы сможете воспользоваться ботом! 🚀"
         )
         return
-
-    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} '
-                            f'Ввел команду "Меню"' + Style.RESET_ALL)
+    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} Ввел команду "Меню"' + Style.RESET_ALL)
     services_all = await db.get_services()
-
     services_buttons = [
         InlineKeyboardButton(text=service_all.service_name, callback_data=f'service_{service_all.id}')
         for service_all in services_all
     ]
     keyboard_buttons = InlineKeyboardMarkup(inline_keyboard=[[button] for button in services_buttons])
-
     await message.answer(f'Выберите нужную вам услугу: ', reply_markup=keyboard_buttons)
-
 
 @start_router.message(F.text == '🆘 Помощь')
 async def help(message: Message):
-    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} '
-                            f'находится в разделе помощи' + Style.RESET_ALL)
-
+    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} находится в разделе помощи' + Style.RESET_ALL)
     await message.answer('Ты и так уже в нашем боте-поддержке, дружище!\n'
                          f'Что, хочешь устроить еще одну виртуальную встречу с самим собой? 🤨 \n'
                          f'Только не говори, что ты пришел сюда, чтобы поговорить о жизни… Я тут не для того, чтобы лечить душевные раны! \n\n'
@@ -122,35 +107,29 @@ async def help(message: Message):
                          f'/start - перезагрузить бота\n'
                          f'/stop_chat - остановить диалог с сапортом\n', parse_mode='HTML')
 
-
 @start_router.message(F.text == '📩 Жалоба')
 async def help(message: Message):
-    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} '
-                            f'находится в разделе помощи' + Style.RESET_ALL)
-
+    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} находится в разделе помощи' + Style.RESET_ALL)
     await message.answer('Ты совсем уже?\n'
                          f'Пожаловаться можешь тут <a href="https://telefon-doveria.ru/teenagers/">АДМИНИСТРАЦИЯ БОТА</a> 🤨\n'
                          f'А здесь заходи не бойся, выходи не плачь!\n\n'
                          f'😈 Выбери услугу из меню и не нажимай больше на кнопку жалоба, пацаны не жалуются😎😜',
                          parse_mode='HTML', disable_web_page_preview=True)
 
-
 pinned_messages = {}
-
 
 async def pin_message(bot: Bot, chat_id: int, message_id: int):
     try:
         await bot.pin_chat_message(
             chat_id=chat_id,
             message_id=message_id,
-            disable_notification=True  # Отключить уведомление
+            disable_notification=True
         )
         pinned_messages[chat_id] = message_id
         print(f"Сообщение закреплено в чате {pinned_messages}")
         print("Сообщение закреплено!")
     except TelegramAPIError as e:
         print(f"Ошибка: {e}")
-
 
 @start_router.callback_query(F.data.startswith('service_'))
 async def callback_service(call: CallbackQuery, state: FSMContext):
@@ -159,15 +138,12 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
         if result is True:
             await call.message.delete()
             return
-
         key = f"ticket_timeout:{call.from_user.id}"
         if await redis_client.exists(key):
             remaining = await redis_client.ttl(key)
             await call.message.delete()
             await call.message.answer(f"⏳ Вы уже отправляли запрос, пожалуйста, подождите:\n{remaining} секунд(ы) \n({remaining // 60} минут(ы)).")
             return
-
-
         if is_restricted_time():
             await call.message.answer(
                 "⏳ Доброго времени суток!\n\n"
@@ -177,38 +153,40 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
                 "в рабочее время.\n\n"
                 "Спасибо за понимание! 💙"
             )
-
-			service_id = int(call.data.split('_')[1])
-			user_id = call.from_user.id
-			services_all = await db.get_services()
-			service_obj = next((s for s in services_all if s.id == int(call.data.split('_')[1])), None)
-			if service_obj and service_obj.service_name == 'Техническая помощь / Technical Support':
-			    cnt = await db.count_user_service_requests_today(call.from_user.id, service_obj.service_name)
-			    if cnt >= 2:
-			        await call.message.answer('Вы уже отправили 2 обращения в техническую поддержку за текущие сутки. Новое обращение будет доступно завтра.')
-			        return
-			add_order = await db.add_orders(service_id, user_id)
-
-
+        service_id = int(call.data.split('_')[1])
+        user_id = call.from_user.id
+        services_all = await db.get_services()
+        service_obj = next((s for s in services_all if s.id == service_id), None)
+        if service_obj and service_obj.service_name == 'Техническая помощь / Technical Support':
+            cnt = await db.count_user_service_requests_today(user_id, service_obj.service_name)
+            if cnt >= 2:
+                await call.message.answer('Вы уже отправили 2 обращения в техническую поддержку за текущие сутки. Новое обращение будет доступно завтра.')
+                return
+        add_order = await db.add_orders(service_id, user_id)
         if add_order == 'Active-Ticket':
-            await call.message.answer(f'У вас уже есть активный тикет')
+            await call.message.answer('У вас уже есть активный тикет')
             return
-        
         message_send_user = (
-   	    f"📩 Ваш Тикет №{add_order['id']}\n"
-  	    f"🛠 Услуга: {add_order['service_name']}\n"
-     	    f"⏳ Создана: {add_order['created_at']}\n\n"
-    	    f"💬 Ожидайте ответа агента поддержки.\n"
-    	    f"После того, как заявка будет принята, опишите Вашу проблему и предоставьте требуемую информацию.\n\n"
-   	    f"ℹ️ Обращаем ваше внимание, техническая поддержка включена в стоимость каждого продукта и не подразумевает "
-   	    f"более 2 обращений при суточной подписке.\n\n"
-   	    f"⏱ Среднее время ответа агента поддержки:\n"
-   	    f"• До 60 минут в прайм-тайм\n"
-   	    f"• До 30 минут в остальное время\n\n"
-   	    f"🚀 Если Вы хотите получать приоритетную поддержку,\n"
-   	    f"пожалуйста, свяжитесь с Администратором: @st3lland"
-	)
-
+            f"📩 Ваш Тикет №{add_order['id']}\n"
+            f"🛠 Услуга: {add_order['service_name']}\n"
+            f"⏳ Создана: {add_order['created_at']}\n\n"
+            f"💬 Ожидайте ответа агента поддержки.\n"
+            f"После того, как заявка будет принята, опишите Вашу проблему и предоставьте требуемую информацию.\n\n"
+            f"ℹ️ Обращаем ваше внимание, техническая поддержка включена в стоимость каждого продукта и не подразумевает более 2 обращений в сутки.\n\n"
+            f"⏱️ Среднее время ответа агента поддержки:\n"
+            f"• До 60 минут в прайм-тайм\n"
+            f"• До 30 минут в остальное время\n\n"
+        )
+        reply_markup_client_buttons = [[InlineKeyboardButton(text="🗑 Отменить", callback_data=f"remove_order:{add_order['id']}")]]
+        if add_order['service_name'] == 'Техническая помощь / Technical Support':
+            message_send_user += (
+                "Приоритетная поддержка нацелена на максимальную скорость в решении любых проблем пользователя с нашими продуктами.\n\n"
+                "После оплаты Вы будете добавлены в беседу, где Вы сможете обратиться напрямую к агенту поддержки и получить помощь немедленно.\n"
+            )
+            reply_markup_client_buttons.append(
+                [InlineKeyboardButton(text="🚀 Приоритетная поддержка", url="https://oplata.info/asp2/pay_wm.asp?id_d=5423227&lang=ru-RU")]
+            )
+        keyboard_client = InlineKeyboardMarkup(inline_keyboard=reply_markup_client_buttons)
         excluded_usernames = ['jarkadash', 'afnskwb', 'Voldemort_1337', 'st3lland', 'MrMikita', 'GB_Support_Team']
         users = await db.get_user_role_id()
         if add_order['service_name'] == 'Получить Ключ / Get a key':
@@ -220,7 +198,6 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             support_mentions = ", ".join([f"@{support.username}" for support in supports])
             tread_id = GROUP_CHAT_ID_TIKETS_SUPPORT
         logger.info(Fore.BLUE + f'{support_mentions}' + Style.RESET_ALL)
-
         message_send_support = (
             f"📩 <b>Тикет</b> №{add_order['id']}\n"
             f"👤 <b>Пользователь:</b> @{add_order['client_name']}\n"
@@ -230,23 +207,15 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             f"🛠 <b>Услуга:</b> {add_order['service_name']}\n"
             f"ℹ️ <b>Статус:</b> <i>Новый</i>\n"
             f"⏳ <b>Создана:</b> {add_order['created_at']}\n\n"
-            f'{support_mentions}\n'
+            f"{support_mentions}\n"
             f"⚡ <b>Нажмите 'Принять', чтобы взять Тикет в работу.</b>"
         )
-
-        keyboard_client = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🗑 Отменить", callback_data=f"remove_order:{add_order['id']}"), ],
-            ]
-        )
-
         keyboard_admin = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Принять Тикет", callback_data=f"accept_order:{add_order['id']}"), ],
+                [InlineKeyboardButton(text="✅ Принять Тикет", callback_data=f"accept_order:{add_order['id']}")],
                 [InlineKeyboardButton(text="🗑 Отклонить Тикет", callback_data=f"cancel_order:{add_order['id']}")]
             ]
         )
-
         support_message = await call.bot.send_message(
             chat_id=GROUP_CHAT_ID,
             text=message_send_support,
@@ -254,44 +223,35 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             reply_markup=keyboard_admin,
             parse_mode="HTML"
         )
-
         user_message = await call.message.edit_text(
             message_send_user,
             parse_mode="HTML",
             reply_markup=keyboard_client
         )
-        await db.add_messages_history(chat_id=user_message.chat.id, support_message_id=support_message.message_id,
-                                      client_message_id=user_message.message_id, order_id=add_order['id'])
-
+        await db.add_messages_history(chat_id=user_message.chat.id, support_message_id=support_message.message_id, client_message_id=user_message.message_id, order_id=add_order['id'])
         await pin_message(call.bot, GROUP_CHAT_ID, support_message.message_id)
-
     except Exception as e:
         logger.error(f'Ошибка при обработке команды "service_": {e}')
         await call.message.answer(f'Ошибка попробуйте позже')
-
 
 async def unpin_specific_message(bot: Bot, chat_id: int, message_id: int):
     try:
         await bot.unpin_chat_message(
             chat_id=chat_id,
-            message_id=message_id  # Указываем ID сообщения, которое нужно открепить
+            message_id=message_id
         )
         print(f"Сообщение {message_id} откреплено!")
     except TelegramAPIError as e:
         print(f"Ошибка: {e}")
 
-
 @start_router.callback_query(F.data.startswith('remove_order:'))
 async def remove_order(call: CallbackQuery, state: FSMContext, bot: Bot):
     try:
-        logger.info(
-            f'📢 Получен запрос на удаление тикета от пользователя {call.from_user.username} (ID: {call.from_user.id})')
-
+        logger.info(f'📢 Получен запрос на удаление тикета от пользователя {call.from_user.username} (ID: {call.from_user.id})')
         order_id = int(call.data.split(':')[1])
         logger.info(f'🔍 Обрабатываем удаление тикета №{order_id}...')
         await redis_client.setex(f"ticket_timeout:{call.from_user.id}", TIMEOUT, "1")
         result = await db.remove_ticket_user(order_id)
-
         if result is False:
             logger.warning(f'❌ Ошибка при удалении тикета №{order_id}. Возвращаем сообщение пользователю.')
             await call.message.answer('Ошибка, попробуйте позже')
@@ -299,10 +259,7 @@ async def remove_order(call: CallbackQuery, state: FSMContext, bot: Bot):
         elif result == 'Не новый':
             await call.message.edit_text('Вы не можете отменить свой тикет, если он уже принят или закрыт')
             return
-
-        logger.info(
-            f'✅ Тикет №{result["order_id"]} успешно отменён пользователем {result["client_name"]} (ID: {result["client_id"]})')
-
+        logger.info(f'✅ Тикет №{result["order_id"]} успешно отменён пользователем {result["client_name"]} (ID: {result["client_id"]})')
         minutes = int(TIMEOUT / 60)
         message_send_user = (
             f"📩 Ваш Тикет №{result['order_id']}\n"
@@ -310,7 +267,6 @@ async def remove_order(call: CallbackQuery, state: FSMContext, bot: Bot):
             f"❌ <b>Отменен</b>\n\n"
             f"⚠️ Вы сможете создать новый тикет, только после истечении {minutes} минут!"
         )
-
         message_send_support = (
             f"📩 <b>Тикет</b> №{result['order_id']}\n"
             f"👤 <b>Пользователь:</b> @{result['client_name']}\n"
@@ -322,7 +278,6 @@ async def remove_order(call: CallbackQuery, state: FSMContext, bot: Bot):
             f"⏳ <b>Создана:</b> {result['created_at']}\n\n"
             f"⚠️ Пользователь отменил тикет"
         )
-
         await call.bot.edit_message_text(
             message_id=result['support_message_id'],
             chat_id=GROUP_CHAT_ID,
@@ -330,7 +285,6 @@ async def remove_order(call: CallbackQuery, state: FSMContext, bot: Bot):
             parse_mode="HTML"
         )
         logger.info(f'📤 Сообщение об отмене тикета №{result["order_id"]} отправлено в поддержку.')
-
         await call.bot.edit_message_text(
             message_id=result['client_message_id'],
             chat_id=call.from_user.id,
@@ -344,18 +298,12 @@ async def remove_order(call: CallbackQuery, state: FSMContext, bot: Bot):
         logger.error(f'🔥 Ошибка при обработке удаления тикета: {e}', exc_info=True)
         await call.message.answer('Произошла ошибка, попробуйте позже.')
 
-
 @start_router.message(StarsOrder.stars_order)
 async def star_worker(message: Message, state: FSMContext):
-    # Получаем задачу таймера из state.data
     data = await state.get_data()
     timeout_task = data.get('timeout_task')
-
-    # Если задача существует, отменяем ее
     if timeout_task:
         timeout_task.cancel()
-
-    # Обработка оценки
     logger.info(Fore.BLUE + f"Пользователь оценивает Тикет на {message.text.strip()} " + Style.RESET_ALL)
     reg_data = await state.get_data()
     try:
@@ -363,35 +311,26 @@ async def star_worker(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Для оценки оказания услуги пожалуйста введите число от 1 до 10")
         return
-
     if not (1 <= stars <= 10):
         await message.answer("Оценка должна быть в диапазоне от 1 до 10")
         return
-
     result = await db.stars_order_update(int(reg_data.get('order_id')), stars)
-
     if result is True:
         await message.answer(f"Благодарим вас за оценку! {stars}", reply_markup=start_menu)
     else:
         await message.answer(f"Ошибка при оценке. Попробуйте позже.")
         logger.error(Fore.RED + f"Ошибка при оценке Тикета: {result}" + Style.RESET_ALL)
         return
-
     await state.clear()
-
 
 @start_router.message(F.text == 'Аккаунты RUST')
 async def start_accounts(message: Message):
-    logger.info(Fore.BLUE + f"Пользователь {message.from_user.username} (ID: {message.from_user.id}) "
-                            f"запустил команду 'Аккаунты RUST'" + Style.RESET_ALL)
-
+    logger.info(Fore.BLUE + f"Пользователь {message.from_user.username} (ID: {message.from_user.id}) запустил команду 'Аккаунты RUST'" + Style.RESET_ALL)
     await message.answer("Выберите тип аккаунта", reply_markup=accounts)
-
 
 @start_router.callback_query(F.data.startswith('zero_accounts'))
 async def zero_accounts(call: CallbackQuery):
-    logger.info(Fore.BLUE + f"Пользователь {call.from_user.username} (ID: {call.from_user.id}) "
-                            f"открыл меню Нулевый аккаунт" + Style.RESET_ALL)
+    logger.info(Fore.BLUE + f"Пользователь {call.from_user.username} (ID: {call.from_user.id}) открыл меню Нулевый аккаунт" + Style.RESET_ALL)
     message_text = (
         f"<b>🎮 Раст аккаунт</b> с рандомными часами <b>🕒 от 0 до 100</b>\n\n"
         f"<b>❗️ ВАЖНОЕ ОПИСАНИЕ:</b>\n"
@@ -407,25 +346,19 @@ async def zero_accounts(call: CallbackQuery):
         f"🚫 В настройках <b>ОТКЛЮЧИТЬ</b> Remote play\n"
         f"💵 Цена: 800₽"
     )
-
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 Купить сейчас",
-                                  url='https://www.digiseller.market/asp2/pay_wm.asp?id_d=5075738&lang=ru-RU')],
+            [InlineKeyboardButton(text="🛒 Купить сейчас", url='https://www.digiseller.market/asp2/pay_wm.asp?id_d=5075738&lang=ru-RU')],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data='accounts_back')]
-
         ]
     )
     await call.message.edit_text(message_text, parse_mode="HTML", reply_markup=keyboard)
 
-
 @start_router.callback_query(F.data.startswith('active_accounts'))
 async def active_accounts(call: CallbackQuery, bot: Bot):
-    logger.info(Fore.BLUE + f"Пользователь {call.from_user.username} (ID: {call.from_user.id}) "
-                            f"открыл меню Активный аккаунт" + Style.RESET_ALL)
+    logger.info(Fore.BLUE + f"Пользователь {call.from_user.username} (ID: {call.from_user.id}) открыл меню Активный аккаунт" + Style.RESET_ALL)
     image1 = "media/image1.jpg"
     image2 = "media/image2.jpg"
-
     message_text = (
         f"<b>🎮 Раст аккаунт</b> с часами <b>🕒 от 1500 + твич предметы</b>\n\n"
         f"<b>❗️ ВАЖНОЕ ОПИСАНИЕ:</b>\n"
@@ -441,41 +374,30 @@ async def active_accounts(call: CallbackQuery, bot: Bot):
         f"🚫 В настройках <b>ОТКЛЮЧИТЬ</b> Remote play\n"
         f"💵 Цена: 3000₽"
     )
-
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 Купить сейчас",
-                                  url='https://www.digiseller.market/asp2/pay_wm.asp?id_d=5075744&lang=ru-RU')],
+            [InlineKeyboardButton(text="🛒 Купить сейчас", url='https://www.digiseller.market/asp2/pay_wm.asp?id_d=5075744&lang=ru-RU')],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data='accounts_back')]
-
         ]
     )
-    # Создаем медиа-группу
     media = InputMediaPhoto(
         media=FSInputFile(image1),
         caption=message_text,
         parse_mode="HTML"
     )
-
-
     try:
-        # Редактируем фото и подпись
         await call.message.edit_media(media=media, reply_markup=keyboard)
-
     except Exception as e:
         logger.error(f"Ошибка редактирования: {e}")
         await call.answer("⚠️ Не удалось обновить", show_alert=True)
 
-
 @start_router.callback_query(F.data.startswith('accounts_back'))
 async def accounts_back(call: CallbackQuery):
-    logger.info(Fore.BLUE + f"Пользователь {call.from_user.username} (ID: {call.from_user.id}) "
-                            f"открыл меню аккаунтов" + Style.RESET_ALL)
+    logger.info(Fore.BLUE + f"Пользователь {call.from_user.username} (ID: {call.from_user.id}) открыл меню аккаунтов" + Style.RESET_ALL)
     await call.message.delete()
     await call.message.answer("Выберите тип аккаунта", reply_markup=accounts)
 
 @start_router.callback_query(F.data.startswith('close_accounts'))
 async def close_accounts(call: CallbackQuery):
-    logger.info(Fore.BLUE + f"Пользователь {call.from_user.username} (ID: {call.from_user.id}) "
-                            f"закрыл меню аккаунтов" + Style.RESET_ALL)
+    logger.info(Fore.BLUE + f"Пользователь {call.from_user.username} (ID: {call.from_user.id}) закрыл меню аккаунтов" + Style.RESET_ALL)
     await call.message.delete()
