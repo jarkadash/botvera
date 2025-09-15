@@ -89,12 +89,16 @@ async def open_menu(message: Message, state: FSMContext):
         return
     logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} Ввел команду "Меню"' + Style.RESET_ALL)
     services_all = await db.get_services()
-    services_buttons = [
-        InlineKeyboardButton(text=service_all.service_name, callback_data=f'service_{service_all.id}')
-        for service_all in services_all
-    ]
-    keyboard_buttons = InlineKeyboardMarkup(inline_keyboard=[[button] for button in services_buttons])
-    await message.answer(f'Выберите нужную вам услугу: ', reply_markup=keyboard_buttons)
+    rows = [[InlineKeyboardButton(text=s.service_name, callback_data=f"service_{s.id}")] for s in services_all]
+    rows.append([
+        InlineKeyboardButton(
+            text="🚀 Приоритетная поддержка",
+            url="https://oplata.info/asp2/pay_wm.asp?id_d=5423227&lang=ru-RU"
+        )
+    ])
+    keyboard_buttons = InlineKeyboardMarkup(inline_keyboard=rows)
+    await message.answer('Выберите нужную вам услугу:', reply_markup=keyboard_buttons)
+
 
 @start_router.message(F.text == '🆘 Помощь')
 async def help(message: Message):
