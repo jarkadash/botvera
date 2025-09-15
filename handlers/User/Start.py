@@ -90,14 +90,31 @@ async def open_menu(message: Message, state: FSMContext):
     logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} Ввел команду "Меню"' + Style.RESET_ALL)
     services_all = await db.get_services()
     rows = [[InlineKeyboardButton(text=s.service_name, callback_data=f"service_{s.id}")] for s in services_all]
-    rows.append([
-        InlineKeyboardButton(
-            text="🚀 Приоритетная поддержка",
-            url="https://oplata.info/asp2/pay_wm.asp?id_d=5423227&lang=ru-RU"
-        )
-    ])
+    rows.append([InlineKeyboardButton(text="🚀 Приоритетная поддержка", callback_data="priority_support")])
     keyboard_buttons = InlineKeyboardMarkup(inline_keyboard=rows)
     await message.answer('Выберите нужную вам услугу:', reply_markup=keyboard_buttons)
+
+
+@start_router.callback_query(F.data == "priority_support")
+async def priority_support(call: CallbackQuery):
+    text = (
+        "🚀 <b>Приоритетная поддержка</b>\n\n"
+        "Приоритетная поддержка нацелена на максимальную скорость в решении любых проблем пользователя с нашими продуктами.\n\n"
+        "После оплаты Вы будете добавлены в закрытую беседу, где сможете обратиться напрямую к агенту поддержки и получить помощь немедленно."
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить", url="https://oplata.info/asp2/pay_wm.asp?id_d=5423227&lang=ru-RU")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")]
+        ]
+    )
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+@start_router.callback_query(F.data == "back_to_menu")
+async def back_to_menu(call: CallbackQuery, state: FSMContext):
+    await open_menu(call.message, state)
+
 
 
 @start_router.message(F.text == '🆘 Помощь')
@@ -180,6 +197,8 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             f"⏱️ Среднее время ответа агента поддержки:\n"
             f"• До 60 минут в прайм-тайм\n"
             f"• До 30 минут в остальное время\n\n"
+            f"🚀 Если Вы хотите получать приоритетную поддержку,\n"
+            f"пожалуйста, свяжитесь с Администратором: @st3lland"
         )
         # Клавиатура клиента: только «Отменить»
         keyboard_client = InlineKeyboardMarkup(
