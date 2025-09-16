@@ -207,7 +207,7 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
 
         user_message = await call.bot.send_photo(
             chat_id=call.from_user.id,
-            photo=FSInputFile("client_ticket.jpg"),  # картинка в корне проекта
+            photo=FSInputFile("IMG_20250916_172720_485.png"),
             caption=message_send_user,
             parse_mode="HTML",
             reply_markup=keyboard_client
