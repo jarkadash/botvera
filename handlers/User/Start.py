@@ -15,6 +15,7 @@ from handlers.User.keyboard.replykeqyboard import *
 from handlers.User.keyboard.InlineKeyboard import *
 from config import *
 from commands import set_commands_admin
+import os
 
 db = DataBase()
 start_router = Router()
@@ -94,7 +95,6 @@ async def open_menu(message: Message, state: FSMContext):
     keyboard_buttons = InlineKeyboardMarkup(inline_keyboard=rows)
     await message.answer('Выберите нужную вам услугу:', reply_markup=keyboard_buttons)
 
-
 @start_router.callback_query(F.data == "priority_support")
 async def priority_support(call: CallbackQuery):
     text = (
@@ -110,12 +110,9 @@ async def priority_support(call: CallbackQuery):
     )
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
 
-
 @start_router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(call: CallbackQuery, state: FSMContext):
     await open_menu(call.message, state)
-
-
 
 @start_router.message(F.text == '🆘 Помощь')
 async def help(message: Message):
@@ -204,10 +201,16 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
                 [InlineKeyboardButton(text="🗑 Отменить", callback_data=f"remove_order:{add_order['id']}")]
             ]
         )
-
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(base_dir, "../../"))
+        image_path = os.path.join(project_root, "IMG_20250916_172720_485.png")
         user_message = await call.bot.send_photo(
             chat_id=call.from_user.id,
-            photo=FSInputFile("IMG_20250916_172720_485.png"),
+            photo=FSInputFile(image_path),
             caption=message_send_user,
             parse_mode="HTML",
             reply_markup=keyboard_client
@@ -247,11 +250,6 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             message_thread_id=tread_id,
             reply_markup=keyboard_admin,
             parse_mode="HTML"
-        )
-        user_message = await call.message.edit_text(
-            message_send_user,
-            parse_mode="HTML",
-            reply_markup=keyboard_client
         )
         await db.add_messages_history(chat_id=user_message.chat.id, support_message_id=support_message.message_id, client_message_id=user_message.message_id, order_id=add_order['id'])
         await pin_message(call.bot, GROUP_CHAT_ID, support_message.message_id)
