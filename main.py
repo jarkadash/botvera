@@ -1,6 +1,5 @@
 import asyncio
 from datetime import datetime
-
 import pytz
 import redis.asyncio as redis
 import html
@@ -12,11 +11,9 @@ from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from colorama import Fore, Style
 from dateutil.parser import parse
 from dotenv import load_dotenv
-
 from aiogram import Bot, Dispatcher
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
-
 from config import GROUP_CHAT_ID
 from logger import logger
 from database.db import DataBase
@@ -27,6 +24,7 @@ from handlers.Worker.Start import worker_router
 from handlers.Chat import chat_router
 from handlers.Media.Start import media_router
 from commands import set_commands
+
 db = DataBase()
 load_dotenv()
 redis = redis.Redis(
@@ -37,10 +35,8 @@ redis = redis.Redis(
     decode_responses=True,
 )
 token = getenv('TOKEN')
-
 storage = RedisStorage(redis)
 bot = Bot(token=token, default=DefaultBotProperties(parse_mode='HTML'))
-
 dp = Dispatcher(storage=storage)
 
 async def start_up(bot: Bot):
@@ -96,8 +92,7 @@ async def start_check(bot: Bot):
                                     chat_id=int(message['chat_id']),
                                     message_id=int(message['client_message_id'])
                                 )
-                                logger.debug(
-                                    Fore.GREEN + f'Удалено сообщение {message["client_message_id"]}' + Style.RESET_ALL)
+                                logger.debug(Fore.GREEN + f'Удалено сообщение {message["client_message_id"]}' + Style.RESET_ALL)
                             except Exception as delete_error:
                                 logger.error(Fore.RED + f'Ошибка удаления сообщения: {delete_error}' + Style.RESET_ALL)
                         if message.get('support_message_id'):
@@ -136,11 +131,9 @@ async def start_check(bot: Bot):
                                     parse_mode="HTML"
                                 )
                                 await unpin_specific_message(bot, GROUP_CHAT_ID, int(message['support_message_id']))
-                                logger.debug(
-                                    Fore.GREEN + f'Откреплено сообщение {message["support_message_id"]}' + Style.RESET_ALL)
+                                logger.debug(Fore.GREEN + f'Откреплено сообщение {message["support_message_id"]}' + Style.RESET_ALL)
                             except Exception as edit_error:
-                                logger.error(
-                                    Fore.RED + f'Ошибка редактирования сообщения: {edit_error}' + Style.RESET_ALL)
+                                logger.error(Fore.RED + f'Ошибка редактирования сообщения: {edit_error}' + Style.RESET_ALL)
                     except Exception as msg_error:
                         logger.error(Fore.RED + f'Ошибка обработки сообщения: {msg_error}' + Style.RESET_ALL)
                 try:
