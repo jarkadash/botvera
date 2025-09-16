@@ -16,3 +16,5 @@ def accounts_kb(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=t3, callback_data="close_accounts")]
         ]
     )
+
+accounts = accounts_kb("ru")
