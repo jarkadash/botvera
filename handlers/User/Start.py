@@ -280,7 +280,13 @@ async def remove_order(call: CallbackQuery, state: FSMContext, bot: Bot):
             await call.message.answer('Ошибка, попробуйте позже')
             return
         elif result == 'Не новый':
-            await call.message.edit_text('Вы не можете отменить свой тикет, если он уже принят или закрыт')
+            try:
+                await call.message.edit_caption('Вы не можете отменить свой тикет, если он уже принят или закрыт')
+            except Exception:
+                try:
+                    await call.message.edit_text('Вы не можете отменить свой тикет, если он уже принят или закрыт')
+                except Exception:
+                    await call.answer('Вы не можете отменить свой тикет, если он уже принят или закрыт', show_alert=True)
             return
         logger.info(f'✅ Тикет №{result["order_id"]} успешно отменён пользователем {result["client_name"]} (ID: {result["client_id"]})')
         minutes = int(TIMEOUT / 60)
@@ -307,14 +313,20 @@ async def remove_order(call: CallbackQuery, state: FSMContext, bot: Bot):
             text=message_send_support,
             parse_mode="HTML"
         )
-        logger.info(f'📤 Сообщение об отмене тикета №{result["order_id"]} отправлено в поддержку.')
-        await call.bot.edit_message_text(
-            message_id=result['client_message_id'],
-            chat_id=call.from_user.id,
-            text=message_send_user,
-            parse_mode="HTML"
-        )
-        logger.info(f'📤 Сообщение пользователю @{result["client_name"]} (ID: {result["client_id"]}) отправлено.')
+        try:
+            await call.bot.edit_message_caption(
+                message_id=result['client_message_id'],
+                chat_id=call.from_user.id,
+                caption=message_send_user,
+                parse_mode="HTML"
+            )
+        except Exception:
+            await call.bot.edit_message_text(
+                message_id=result['client_message_id'],
+                chat_id=call.from_user.id,
+                text=message_send_user,
+                parse_mode="HTML"
+            )
         print(result['support_message_id'])
         await unpin_specific_message(call.bot, GROUP_CHAT_ID, int(result['support_message_id']))
     except Exception as e:
