@@ -108,10 +108,27 @@ async def priority_support(call: CallbackQuery):
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_menu")]
         ]
     )
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(base_dir, "../../"))
+    image_path = os.path.join(project_root, "IMG_20250916_172720_485.png")
+    await call.bot.send_photo(
+        chat_id=call.from_user.id,
+        photo=FSInputFile(image_path),
+        caption=text,
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
 
 @start_router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(call: CallbackQuery, state: FSMContext):
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
     await open_menu(call.message, state)
 
 @start_router.message(F.text == '🆘 Помощь')
