@@ -1,5 +1,5 @@
 from aiogram import F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from core.i18n import t, normalize_lang
 from handlers.User.Start import start_router
@@ -24,6 +24,19 @@ async def choose_language_on_start(message: Message):
         lang = lang.decode()
     lang = normalize_lang(lang)
     await message.answer(t("start_hello_message", lang))
+
+@start_router.message(Command(commands=["language", "lang"]))
+async def choose_language_command(message: Message):
+    user_key = LANG_KEY.format(user_id=message.from_user.id)
+    cur = await redis_client.get(user_key)
+    lang = "ru"
+    if cur:
+        try:
+            cur = cur.decode() if hasattr(cur, "decode") else str(cur)
+        except Exception:
+            cur = "ru"
+        lang = normalize_lang(cur)
+    await message.answer(t("choose_language", lang), reply_markup=_kb_lang())
 
 @start_router.callback_query(F.data.in_(["set_lang_ru","set_lang_en"]))
 async def set_language(call: CallbackQuery):
