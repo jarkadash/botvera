@@ -22,7 +22,7 @@ import pandas as pd
 
 
 db = DataBase()
-active_timers = {}  # order_id: asyncio.Task
+active_timers = {}
 worker_router = Router()
 
 class IsSupportOrAdmin(Filter):
@@ -68,7 +68,7 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                 f"⏳ <b>Принята:</b> {accept.accept_at.strftime('%d-%m-%Y %H:%M')}\n\n"
                 f"<a href=\"https://t.me/GBPSupport_bot\">Перейти в бота</a>"
             )
-            try:# Уведомляем клиента
+            try:
                 await bot.send_message(
                     chat_id=int(accept.client_id),
                     text=(
@@ -78,7 +78,6 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                         f"Команда /stop_chat — завершить диалог"
                     )
                 )
-                # Если всё нормально — запускаем таймер
                 task = asyncio.create_task(auto_close_ticket_if_silent(order_id, accept.client_id, bot))
                 active_timers[order_id] = task
                 if accept.service_name == "Техническая помощь / Technical Support":
@@ -149,9 +148,9 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                     f"<b>Причина:</b> Пользователь заблокировал бота\n"
                 )
                 await db.get_auto_close_order(int(order_id), reason="Авто-закрытие (Заблокировал бота)")
-                await redis_client.delete(f"ticket:{accept.client_id}")  # Changed from accept.chat_id
-                await redis_client.delete(f'chat:{accept.client_id}')  # Changed from accept.chat_id
-                await redis_client.delete(f"role:{accept.client_id}")  # Changed from accept.chat_id
+                await redis_client.delete(f"ticket:{accept.client_id}")
+                await redis_client.delete(f'chat:{accept.client_id}')
+                await redis_client.delete(f"role:{accept.client_id}")
                 await redis_client.delete(f"chat:{call.from_user.id}")
                 await redis_client.delete(f"ticket:{call.from_user.id}")
                 await redis_client.delete(f"role:{call.from_user.id}")
@@ -160,8 +159,22 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                 if message_info:
                     logger.info(Fore.BLUE + f"Получена информация о Тикете №{order_id}." + Style.RESET_ALL)
                     messages_id = message_info.support_message_id
-                await unpin_specific_message(bot, GROUP_CHAT_ID, int(message_info.support_message_id))
-            await call.message.edit_text(message_accept, parse_mode="HTML")
+                    await bot.edit_message_text(
+                        chat_id=GROUP_CHAT_ID,
+                        message_id=int(message_info.support_message_id),
+                        text=message_accept,
+                        parse_mode="HTML"
+                    )
+                    await unpin_specific_message(bot, GROUP_CHAT_ID, int(message_info.support_message_id))
+            if 'message_accept' in locals():
+                msg_info = await db.get_all_message(int(order_id))
+                if msg_info:
+                    await bot.edit_message_text(
+                        chat_id=GROUP_CHAT_ID,
+                        message_id=int(msg_info.support_message_id),
+                        text=message_accept,
+                        parse_mode="HTML"
+                    )
     except Exception as e:
         logger.error(f"Ошибка при принятии Тикета: {e}")
 
@@ -188,7 +201,7 @@ async def unpin_specific_message(bot: Bot, chat_id: int, message_id: int):
     try:
         await bot.unpin_chat_message(
             chat_id=chat_id,
-            message_id=message_id  # Указываем ID сообщения, которое нужно открепить
+            message_id=message_id
         )
         print(f"Сообщение {message_id} откреплено!")
     except TelegramAPIError as e:
@@ -207,12 +220,10 @@ async def handle_ticket_response(message: Message, state: FSMContext, bot: Bot):
         await message.answer("⛔️ Текст отмены должен быть больше 100 символов!")
         return
     try:
-        # Попытка отмены Тикета
         cancel = await db.cancel_order(order_id, int(message.from_user.id), description)
         if cancel is False:
             await message.answer("❌ Произошла ошибка при отмене тикета. Попробуйте еще раз.")
         else:
-            # Подготовка текста для уведомления
             message_accept = (
                 f"⛔️ Тикет отменен!\n\n\n"
                 f"📩 <b>Тикет</b> №{order_id}\n"
@@ -229,14 +240,11 @@ async def handle_ticket_response(message: Message, state: FSMContext, bot: Bot):
                 f"<b>Причина отмены:</b> {description}\n"
             )
 
-            # Обновление сообщения с деталями отмененного Тикета
-            await message.bot.edit_message_text(chat_id=message.chat.id, text=message_accept, parse_mode="HTML",  message_id=message_id)
-            await unpin_specific_message(message.bot, message.chat.id, message_id)
-            # Отправка уведомления пользователю о том, что Тикет отменен
+            await message.bot.edit_message_text(chat_id=GROUP_CHAT_ID, text=message_accept, parse_mode="HTML",  message_id=message_id)
+            await unpin_specific_message(message.bot, GROUP_CHAT_ID, message_id)
             await bot.send_message(chat_id=message.from_user.id, text=f"✅ Тикет №{order_id} успешно отменен. Причина: {description}")
             try:
                 await bot.send_message(chat_id=int(cancel.client_id), text=f"⛔️ Ваш тикет №{order_id} отменен!\n Причина: {description}")
-                # Очистка состояния пользователя после завершения операции
             except TelegramForbiddenError as e:
                 logger.error(Fore.RED + f"Пользователь заблокировал бота: {e}" + Style.RESET_ALL)
             await state.clear()
@@ -254,7 +262,6 @@ async def handle_statistics(message: Message, state: FSMContext):
     )
 
     try:
-        # Получаем расчётный период (11–25 или 26–10)
         start_date, end_date = get_calculated_period()
         logger.info(f"Период для статистики: {start_date} – {end_date}")
 
@@ -263,7 +270,6 @@ async def handle_statistics(message: Message, state: FSMContext):
                 session, message.from_user.id, start_date, end_date
             )
 
-            # Построим DataFrame
             def ticket_to_row(ticket, excluded_reason=None):
                 return {
                     "id": ticket.id,
@@ -290,7 +296,6 @@ async def handle_statistics(message: Message, state: FSMContext):
 
             df = pd.DataFrame(all_rows)
 
-            # Оставим только учтённые тикеты
             filtered_df = df[
                 (df["excluded_reason"].isnull()) |
                 (df["excluded_reason"].astype(str).str.strip() == "")
@@ -298,16 +303,13 @@ async def handle_statistics(message: Message, state: FSMContext):
 
             total = len(filtered_df)
 
-            # Средняя оценка
             stars_col = filtered_df["stars"].dropna()
             avg_rating = stars_col.mean() if not stars_col.empty else 0
 
-            # Среднее время ответа
             time_deltas = filtered_df.dropna(subset=["accept_at", "completed_at"])
             time_deltas["duration_sec"] = (time_deltas["completed_at"] - time_deltas["accept_at"]).dt.total_seconds()
             avg_response_time = int(time_deltas["duration_sec"].mean()) if not time_deltas.empty else 0
 
-            # Получаем ставки
             rates = await db.get_user_rates(session, message.from_user.id)
 
             counts = filtered_df["service_name"].value_counts().to_dict()
@@ -323,17 +325,15 @@ async def handle_statistics(message: Message, state: FSMContext):
             if bonus and total >= 50:
                 salary += (total // 50) * bonus
 
-            # Получаем агрегированную статистику
             statistics = await db.statistics_user_by_id(message.from_user.id, start_date, end_date)
 
             if not statistics or "error" in statistics:
                 await message.answer("Ошибка при получении статистики или статистика отсутствует.")
                 return
 
-            # Формируем сообщение
             minutes, seconds = divmod(avg_response_time, 60)
             stars = f"{avg_rating:.2f}" if avg_rating > 0 else 'статистика будет доступна после 10 тикетов!'
-            salary_line = f"💰 Предполагаемая ЗП: {salary:,} руб.".replace(",", " ") if salary else ""
+            salary_line = f"💰 Предполагаемая ЗП: {salary:,} руб.".replace(",", " ") if salary else ""
 
             message_text = (
                 f"📊 Статистика пользователя @{message.from_user.username}\n\n"
@@ -384,7 +384,6 @@ async def close_ticket(order_id: int, client_id: int, bot: Bot, reason: str):
             logger.warning(f"[TIMER] Не найден тикет №{order_id} для уведомлений")
             return
 
-        # ✅ Чистим все связанные Redis-ключи
         await redis_client.delete(f"ticket:{order_info.client_id}")
         await redis_client.delete(f'chat:{order_info.client_id}')
         await redis_client.delete(f"role:{order_info.client_id}")
@@ -395,7 +394,6 @@ async def close_ticket(order_id: int, client_id: int, bot: Bot, reason: str):
 
         logger.info(f"[TIMER] Тикет №{order_id} закрыт автоматически: {reason}")
 
-        # Обновляем сообщение в группе
         message_info = await db.get_all_message(order_id)
         if message_info:
             message_edit_text = format_ticket_closed_message(order_info, reason)
@@ -407,7 +405,6 @@ async def close_ticket(order_id: int, client_id: int, bot: Bot, reason: str):
             )
             await unpin_specific_message(bot, GROUP_CHAT_ID, int(message_info.support_message_id))
 
-        # Уведомляем support'а
         try:
             await bot.send_message(
                 chat_id=order_info.support_id,
@@ -416,7 +413,6 @@ async def close_ticket(order_id: int, client_id: int, bot: Bot, reason: str):
         except TelegramForbiddenError:
             logger.warning(f"[TIMER] Support заблокировал бота — уведомление не отправлено")
 
-        # Уведомляем клиента (если не заблокировал)
         if reason == "Авто-закрытие (Клиент не ответил)":
             try:
                 await bot.send_message(
@@ -434,15 +430,13 @@ async def close_ticket(order_id: int, client_id: int, bot: Bot, reason: str):
 async def auto_close_ticket_if_silent(order_id: int, client_id: int, bot: Bot):
     try:
         logger.info(f"[TIMER] Запущен таймер авто-закрытия тикета №{order_id}")
-        await asyncio.sleep(119)  # 2 минуты
+        await asyncio.sleep(119)
 
-        # Проверка: тикет уже мог быть закрыт вручную
         order_info = await db.get_orders_by_id(order_id)
         if not order_info or order_info.status == "closed":
             logger.info(f"[TIMER] Тикет №{order_id} уже был закрыт вручную — таймер завершён.")
             return
 
-        # Пытаемся предупредить клиента
         try:
             await bot.send_message(
                 chat_id=client_id,
@@ -450,23 +444,19 @@ async def auto_close_ticket_if_silent(order_id: int, client_id: int, bot: Bot):
             )
             logger.info(f"[TIMER] Предупреждение отправлено клиенту по тикету №{order_id}")
         except TelegramForbiddenError:
-            # Клиент уже заблокировал бота
             reason = "Авто-закрытие (Заблокировал бота)"
             logger.warning(f"[TIMER] Клиент заблокировал бота до предупреждения тикета №{order_id}")
             await close_ticket(order_id, client_id, bot, reason)
-            return  # дальше ничего делать не нужно
+            return
 
-        await asyncio.sleep(179)  # ещё 3 минуты
-        # Повторная проверка: тикет уже мог быть закрыт вручную после предупреждения
+        await asyncio.sleep(179)
         order_info = await db.get_orders_by_id(order_id)
         if not order_info or order_info.status == "closed":
             logger.info(f"[TIMER] Тикет №{order_id} был закрыт вручную после предупреждения — авто-закрытие отменено.")
             return
 
-        # Проверка, были ли сообщения от клиента
         message_count = await redis_client.get(f"messages:{order_id}")
         if message_count is None or int(message_count) == 0:
-            # Определим причину: блок или молчание
             try:
                 await bot.send_chat_action(chat_id=client_id, action="typing")
                 reason = "Авто-закрытие (Клиент не ответил)"
