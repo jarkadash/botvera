@@ -81,7 +81,7 @@ async def stop_chat(message: Message, state: FSMContext):
                 txt_closed = f"🚪 Тикет №{ticket} закрыт! 🎮 Спасибо за обращение.\nЕсли у вас появятся вопросы, мы всегда на связи. Удачной игры!"
                 txt_rate = "Пожалуйста, оцените работу поддержки:\nС помощью кнопок ниже, либо можете написать свою оценку от 1 до 10."
             await message.bot.send_message(chat_id=result['client_id'], text=txt_closed)
-            kb = user_stars_kb(await _get_lang(result['client_id'])) if callable(user_stars_kb) else user_stars_kb
+            kb = user_stars_kb()
             await message.bot.send_message(chat_id=result['client_id'], text=txt_rate, reply_markup=kb)
         except TelegramForbiddenError as e:
             logger.error(Fore.RED + f"Пользователь заблокировал бота>: {e}" + Style.RESET_ALL)
