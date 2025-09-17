@@ -81,14 +81,12 @@ async def stop_chat(message: Message, state: FSMContext):
                 txt_closed = f"🚪 Тикет №{ticket} закрыт! 🎮 Спасибо за обращение.\nЕсли у вас появятся вопросы, мы всегда на связи. Удачной игры!"
                 txt_rate = "Пожалуйста, оцените работу поддержки:\nС помощью кнопок ниже, либо можете написать свою оценку от 1 до 10."
             await message.bot.send_message(chat_id=result['client_id'], text=txt_closed)
-            await message.bot.send_message(chat_id=result['client_id'], text=txt_rate, reply_markup=user_stars_kb)
+            kb = user_stars_kb(await _get_lang(result['client_id'])) if callable(user_stars_kb) else user_stars_kb
+            await message.bot.send_message(chat_id=result['client_id'], text=txt_rate, reply_markup=kb)
         except TelegramForbiddenError as e:
             logger.error(Fore.RED + f"Пользователь заблокировал бота>: {e}" + Style.RESET_ALL)
         message_info = await db.get_all_message(int(ticket))
-        if message_info:
-            logger.info(Fore.BLUE + f"Получена информация о Тикете №{ticket}." + Style.RESET_ALL)
-            messages_id = message_info.support_message_id
-        if order:
+        if message_info and order:
             message_edit_text = (
                 f"✅ Тикет закрыт!\n\n\n"
                 f"📩 <b>Тикет</b> №{order.id}\n"
@@ -105,8 +103,8 @@ async def stop_chat(message: Message, state: FSMContext):
                 f"⏳ <b>Закрыта:</b> {order.completed_at.strftime('%d-%m-%Y %H:%M')}\n\n"
                 f"<a href=\"https://t.me/GBPSupport_bot\">Перейти в бота</a>"
             )
-        await message.bot.edit_message_text(message_id=int(message_info.support_message_id), chat_id=GROUP_CHAT_ID, text=message_edit_text, parse_mode="HTML")
-        await unpin_specific_message(message.bot, GROUP_CHAT_ID, int(message_info.support_message_id))
+            await message.bot.edit_message_text(message_id=int(message_info.support_message_id), chat_id=GROUP_CHAT_ID, text=message_edit_text, parse_mode="HTML")
+            await unpin_specific_message(message.bot, GROUP_CHAT_ID, int(message_info.support_message_id))
     else:
         logger.warning(Fore.YELLOW + f"Пользователь {message.from_user.id} не находится в активном чате." + Style.RESET_ALL)
         txt = "⚠️ You are not in an active chat." if lang == "en" else "⚠️ Вы не находитесь в активном чате."
