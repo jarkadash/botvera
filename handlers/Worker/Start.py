@@ -105,7 +105,7 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                             "   *При наличии ошибок — пришлите скриншот ошибки.*"
                         ), parse_mode="Markdown"
                     )
-                elif accept.service_name == "NFA/HWID RESET":
+                elif accept.service_name == "HWID RESET":
                     await bot.send_message(
                         chat_id=int(accept.client_id),
                         text=(
