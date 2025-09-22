@@ -93,7 +93,7 @@ class PaymentStates(StatesGroup):
 CATEGORY_MAP = {
     "technical_support": "Техническая помощь / Technical Support",
     "payment_support": "Помощь с платежами / Payment Support",
-    "hwid_reset": "HWID RESET",
+    "hwid_reset": "NFA / HWID RESET",
     "reselling": "Reselling",
     "get_key": "Получить Ключ / Get a key",
     "bonus_per_50": "Бонус за каждые 50 тикетов"
@@ -840,7 +840,7 @@ async def all_stats_command(message: Message, bot: Bot):
         CATEGORY_ORDER = {
             "Техническая помощь / Technical Support": "Техническая помощь",
             "Помощь с платежами / Payment Support": "Помощь с платежами",
-            "HWID RESET": "HWID reset",
+            "NFA / HWID RESET": "NFA/HWID",
             "Reselling": "Reselling",
             "Получить Ключ / Get a key": "Выдача ключей"
         }
