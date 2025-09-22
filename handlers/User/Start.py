@@ -256,16 +256,16 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             remaining = await redis_client.ttl(key)
             await call.message.delete()
             if lang == "en":
-                txt = f"⏳ You have already sent a request, please wait:\n{remaining} seconds\n({remaining // 60} minutes)."
+                txt = f"⏳ You have already sent a request, please wait:\n{remaining // 60} minutes {remaining % 60} seconds"
             else:
-                txt = f"⏳ Вы уже отправляли запрос, пожалуйста, подождите:\n{remaining} секунд(ы) \n({remaining // 60} минут(ы))."
+                txt = f"⏳ Вы уже отправляли недавно запрос, пожалуйста, подождите:\n{remaining // 60} минут {remaining % 60} секунд"
             await call.message.answer(txt)
             return
         if is_restricted_time():
             if lang == "en":
                 txt = "⏳ Good time of day!\n\nSupport works from 11:00 to 23:00 (MSK).\nWe are currently unavailable and response time is increased.\n\nPlease leave your request and we will reply during working hours.\n\nThank you for understanding 💙"
             else:
-                txt = "⏳ Доброго времени суток!\н\nТехническая поддержка работает с 11:00 до 23:00 (МСК).\nСейчас мы недоступны, и время ожидания ответа увеличено.\n\nПожалуйста, оставьте ваш запрос, и мы обязательно ответим вам в рабочее время.\n\nСпасибо за понимание! 💙"
+                txt = "⏳ Доброго времени суток!\n\nТехническая поддержка работает с 11:00 до 23:00 (МСК).\nСейчас мы недоступны, и время ожидания ответа увеличено.\n\nПожалуйста, оставьте ваш запрос, и мы обязательно ответим вам в рабочее время.\n\nСпасибо за понимание! 💙"
             await call.message.answer(txt)
         service_id = int(call.data.split('_')[1])
         user_id = call.from_user.id
