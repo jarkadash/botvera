@@ -775,18 +775,65 @@ async def save_new_rate(message: Message, state: FSMContext):
 @admin_router.message(F.text.startswith("/allstats"))
 async def all_stats_command(message: Message, bot: Bot):
     try:
-        parts = message.text.strip().split(" ")
+        import re
+        from datetime import datetime
 
-        if len(parts) == 1:
+        raw = message.text.strip()
+
+        if raw.startswith("/allstats"):
+            raw = raw[len("/allstats"):].strip()
+
+        if not raw:
             await message.answer("📅 Укажите диапазон в формате:\n`/allstats 11.07.25–25.07.25`", parse_mode="Markdown")
             start_date, end_date = get_calculated_period()
-        elif len(parts) == 2 and "–" in parts[1]:
-            date_range = parts[1].split("–")
-            start_date = datetime.strptime(date_range[0], DATE_FORMAT).date()
-            end_date = datetime.strptime(date_range[1], DATE_FORMAT).date()
         else:
-            await message.answer("❗ Формат: /allstats ДД.ММ.ГГ–ДД.ММ.ГГ")
-            return
+            parts = re.split(r"\s*[–—\-~]\s*", raw)
+            if len(parts) != 2:
+                await message.answer("❗ Формат: `/allstats ДД.ММ.ГГ–ДД.ММ.ГГ`", parse_mode="Markdown")
+                return
+
+            left, right = parts[0].strip(), parts[1].strip()
+
+            date_formats = []
+            try:
+                date_formats.append(DATE_FORMAT)
+            except NameError:
+                pass
+            date_formats.extend(["%d.%m.%Y", "%d.%m.%y"])
+
+            def try_parse(s: str):
+                for fmt in date_formats:
+                    try:
+                        return datetime.strptime(s, fmt).date()
+                    except ValueError:
+                        continue
+                return None
+
+            right_date = try_parse(right)
+            if right_date is None:
+                await message.answer(
+                    "❗ Не удалось распознать правую дату. Пример: `/allstats 11.07.25–25.07.25`",
+                    parse_mode="Markdown"
+                )
+                return
+
+            if re.fullmatch(r"\d{2}\.\d{2}", left):
+                left = f"{left}.{right_date.year}"
+
+            left_date = try_parse(left)
+            if left_date is None:
+                await message.answer(
+                    "❗ Не удалось распознать левую дату. Примеры:\n"
+                    "`/allstats 11.07–25.07.25`\n"
+                    "`/allstats 11.07.25–25.07.25`",
+                    parse_mode="Markdown"
+                )
+                return
+
+            if right_date < left_date:
+                left_date, right_date = right_date, left_date
+
+            start_date, end_date = left_date, right_date
 
         user = message.from_user
         await bot.send_message(
