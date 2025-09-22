@@ -801,7 +801,7 @@ class DataBase:
 
                 categories = {
                     "Техническая помощь / Technical Support": 0,
-                    "HWID RESET": 0,
+                    "NFA / HWID RESET": 0,
                     "Помощь с платежами / Payment Support": 0,
                     "Reselling": 0,
                     "Получить Ключ / Get a key": 0,
@@ -1306,7 +1306,7 @@ class DataBase:
             logger.warning(f"[RATES] Ставки не найдены для support_id={support_id}, применяем DEFAULT_RATES")
             return {
                 "Техническая помощь / Technical Support": DEFAULT_RATES["technical_support"],
-                "HWID RESET": DEFAULT_RATES["hwid_reset"],
+                "NFA / HWID RESET": DEFAULT_RATES["hwid_reset"],
                 "Помощь с платежами / Payment Support": DEFAULT_RATES["payment_support"],
                 "Reselling": DEFAULT_RATES["reselling"],
                 "Получить Ключ / Get a key": DEFAULT_RATES["get_key"],
@@ -1316,7 +1316,7 @@ class DataBase:
         # Возвращаем словарь с названиями услуг и их ставками
         return {
             "Техническая помощь / Technical Support": row.technical_support,
-            "HWID RESET": row.hwid_reset,
+            "NFA / HWID RESET": row.hwid_reset,
             "Помощь с платежами / Payment Support": row.payment_support,
             "Reselling": row.reselling,
             "Получить Ключ / Get a key": row.get_key,
@@ -1362,7 +1362,7 @@ class DataBase:
                 # Словарь для подсчёта тикетов по категориям
                 categories = {
                     "Техническая помощь / Technical Support": 0,
-                    "HWID RESET": 0,
+                    "NFA / HWID RESET": 0,
                     "Помощь с платежами / Payment Support": 0,
                     "Reselling": 0,
                     "Получить Ключ / Get a key": 0,
