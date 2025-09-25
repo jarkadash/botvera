@@ -341,7 +341,7 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             parse_mode="HTML",
             reply_markup=keyboard_client
         )
-        excluded_usernames = ['jarkadash', 'afnskwb', 'Voldemort_1337', 'st3lland', 'MrMikita', 'GB_Support_Team']
+        excluded_usernames = ['jarkadash', 'afnskwb', 'Voldemort_1337', 'st3lland', 'MrMikita', 'GB_Support_Team', 'eacfanat']
         users = await db.get_user_role_id()
         if add_order['service_name'] == 'Получить Ключ / Get a key':
             admins = [user for user in users if user.role_id == 1 and user.username not in excluded_usernames]
