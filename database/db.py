@@ -55,6 +55,25 @@ def seconds_to_hms(seconds: float) -> str:
 
 
 class DataBase:
+
+
+    async def count_active_for(self, support_id: int) -> int:
+        async with self.Session() as session:
+            try:
+                result = await session.execute(
+                    select(func.count(Orders.id)).where(
+                        Orders.support_id == support_id,
+                        Orders.status == 'at work'
+                    )
+                )
+                cnt = result.scalar() or 0
+                return int(cnt)
+            except Exception as e:
+                logger.error(Fore.RED + f'Ошибка count_active_for: {e}' + Style.RESET_ALL)
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
     def __init__(self):
         self.db_host = os.getenv('DB_HOST')
         self.db_port = os.getenv('DB_PORT')
@@ -709,6 +728,12 @@ class DataBase:
                     logger.warning(Fore.RED + f'Тикет {order_id} не найден!' + Style.RESET_ALL)
                     return False
 
+                # Защита от случайной отмены: отменять можно только если статус 'new'
+                if str(order.status).lower() != 'new':
+                    logger.info(
+                        Fore.YELLOW + f'Отмена тикета {order_id} отклонена: статус {order.status} не new' + Style.RESET_ALL)
+                    return 'STATUS_NOT_NEW'
+
                 order.status = 'canceled'
                 order.accept_at = datetime.now()
                 order.completed_at = datetime.now()
@@ -722,7 +747,6 @@ class DataBase:
                 logger.error(Fore.RED + f'Ошибка: {e}' + Style.RESET_ALL)
                 await session.rollback()
                 raise
-
             finally:
                 await session.close()
 

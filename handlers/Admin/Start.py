@@ -10,7 +10,7 @@ import asyncio
 from Utils import get_calculated_period, filter_tickets_for_statistics
 from datetime import datetime
 from math import floor
-from database.db import DataBase
+from database.db import DataBase, redis_client
 from colorama import Fore, Style
 from aiogram.enums.parse_mode import ParseMode
 from logger import logger
@@ -554,7 +554,7 @@ async def receive_mailing_text(message: Message, state: FSMContext, bot):
     user = message.from_user
     await bot.send_message(
         434791099,
-        f"\u2139\ufe0f Пользователь @{user.username or 'без username'} (id: {user.id}) отправил сообщение для рассылки и ожидает подтверждения."
+        f"⚠️ Пользователь @{user.username or 'без username'} (id: {user.id}) отправил сообщение для рассылки и ожидает подтверждения."
     )
 
 # Подтверждена рассылка
@@ -590,7 +590,7 @@ async def do_real_mailing(call: CallbackQuery, state: FSMContext, bot):
 
     await bot.send_message(
         434791099,
-        f"⚠ Пользователь @{call.from_user.username or 'без username'} (id: {call.from_user.id}) подтвердил рассылку. Начинаем отправку..."
+        f"⚠️ Пользователь @{call.from_user.username or 'без username'} (id: {call.from_user.id}) подтвердил рассылку. Начинаем отправку..."
     )
 
     success = 0
@@ -625,7 +625,7 @@ async def do_real_mailing(call: CallbackQuery, state: FSMContext, bot):
         f"✅ Рассылка завершена!\n\n"
         f"✅ Успешно: {success}\n"
         f"❌ Ошибок: {errors}\n\n"
-        f"⚠ Всего: {total}"
+        f"⚠️ Всего: {total}"
     )
 
     await bot.send_message(
@@ -984,3 +984,33 @@ async def all_stats_command(message: Message, bot: Bot):
     except Exception as e:
         logger.error(f"[ALLSTATS ERROR] {e}", exc_info=True)
         await message.answer("❗ Ошибка при обработке команды /allstats.")
+
+JKEYID = 434791099
+AUTOACCEPT_ENABLED_KEY = "autoaccept:enabled"
+AUTOACCEPT_OWNER_KEY = "autoaccept:owner"
+
+@admin_router.message(Command("autoaccept_on"), F.chat.type == "private")
+async def _autoaccept_on(message: Message):
+    if message.from_user.id != JKEYID:
+        return
+    await redis_client.set(AUTOACCEPT_ENABLED_KEY, "1")
+    await redis_client.set(AUTOACCEPT_OWNER_KEY, str(JKEYID))
+    await message.answer("АП ✅")
+
+@admin_router.message(Command("autoaccept_off"), F.chat.type == "private")
+async def _autoaccept_off(message: Message):
+    if message.from_user.id != JKEYID:
+        return
+    await redis_client.set(AUTOACCEPT_ENABLED_KEY, "0")
+    await redis_client.delete(AUTOACCEPT_OWNER_KEY)
+    await message.answer("АП ⛔")
+
+@admin_router.message(Command("autoaccept_status"), F.chat.type == "private")
+async def _autoaccept_status(message: Message):
+    if message.from_user.id != JKEYID:
+        return
+    enabled = await redis_client.get(AUTOACCEPT_ENABLED_KEY)
+    owner = await redis_client.get(AUTOACCEPT_OWNER_KEY)
+    active_cnt = await db.count_active_for(JKEYID)
+    await message.answer(f"enabled: {enabled or '0'}\nowner: {owner or '-'}\nactive tickets: {active_cnt}")
+

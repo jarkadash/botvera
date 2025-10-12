@@ -107,10 +107,14 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                             f"1. <u><b>Скриншот</b></u>, подтверждающий покупку в личном кабинете <u>(ключ должно быть видно на скриншоте)</u>\n\n"
                             f"2. Ключ продукта <u>в текстовом формате</u>\n\n"
                             f"3. Используешь сторонний спуфер(не встроенный в чит)?"
-                        ), parse_mode="HTML"
+                        ), parse_mode="HTML", reply_markup=None
                     )
 
                 await redis_client.set(f"ticket:{accept.support_id}", order_id)
+                try:
+                    await redis_client.delete(f"autoaccept:reserve:{order_id}")
+                except Exception:
+                    pass
 
                 await bot.send_message(
                     chat_id=call.from_user.id,
@@ -159,7 +163,7 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                         chat_id=GROUP_CHAT_ID,
                         message_id=int(message_info.support_message_id),
                         text=message_accept,
-                        parse_mode="HTML"
+                        parse_mode="HTML", reply_markup=None
                     )
                     await unpin_specific_message(bot, GROUP_CHAT_ID, int(message_info.support_message_id))
             if 'message_accept' in locals():
@@ -169,7 +173,7 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                         chat_id=GROUP_CHAT_ID,
                         message_id=int(msg_info.support_message_id),
                         text=message_accept,
-                        parse_mode="HTML"
+                        parse_mode="HTML", reply_markup=None
                     )
     except Exception as e:
         logger.error(f"Ошибка при принятии Тикета: {e}")
@@ -206,6 +210,14 @@ async def cancel_order(call: CallbackQuery, state: FSMContext):
         if accept is False or accept == 'Пользователь не имеет роли!':
             await call.answer("У вас нет доступа к этому Тикету", show_alert=True)
         else:
+            # Проверяем статус тикета перед запросом причины
+            order = await db.get_orders_by_id(order_id)
+            if not order:
+                await call.answer("Тикет не найден", show_alert=True)
+                return
+            if str(order.status).lower() != 'new':
+                await call.answer("Ошибка: статус не new", show_alert=True)
+                return
             await call.message.edit_text(f"Введите причину отмены Тикета!")
             await state.update_data(message_id=call.message.message_id)
             await state.set_state(TicketState.waiting_for_response)
@@ -235,8 +247,24 @@ async def handle_ticket_response(message: Message, state: FSMContext, bot: Bot):
     if len(description) > 100:
         await message.answer("⛔️ Текст отмены должен быть больше 100 символов!")
         return
+
+    # Повторная проверка статуса перед отменой (вдруг тикет приняли пока вводили причину)
+    order = await db.get_orders_by_id(order_id)
+    if not order:
+        await message.answer("Тикет не найден.")
+        await state.clear()
+        return
+    if str(order.status).lower() != 'new':
+        await message.answer("Ошибка: статус не new")
+        await state.clear()
+        return
+
     try:
         cancel = await db.cancel_order(order_id, int(message.from_user.id), description)
+        if cancel == 'STATUS_NOT_NEW':
+            await message.answer("Ошибка: статус не new")
+            await state.clear()
+            return
         if cancel is False:
             await message.answer("❌ Произошла ошибка при отмене тикета. Попробуйте еще раз.")
         else:
