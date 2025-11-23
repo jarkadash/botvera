@@ -98,9 +98,9 @@ async def stop_chat(message: Message, state: FSMContext):
                 f"🆔 <b>Support_id:</b> {order.support_id}\n"
                 f"👨‍💻 <b>Support_name:</b> @{html.escape(order.support_name)}\n"
                 f"ℹ️ <b>Статус:</b> {html.escape(order.status)}\n"
-                f"⏳ <b>Создана:</b> {order.created_at.strftime('%d-%m-%Y %H:%M')}\n\n"
-                f"⏳ <b>Принята:</b> {order.accept_at.strftime('%d-%m-%Y %H:%M')}\n\n"
-                f"⏳ <b>Закрыта:</b> {order.completed_at.strftime('%d-%m-%Y %H:%M')}\n\n"
+                f"⏳ <b>Создана:</b> {order.created_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
+                f"⏳ <b>Принята:</b> {order.accept_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
+                f"⏳ <b>Закрыта:</b> {order.completed_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
                 f"<a href=\"https://t.me/GBPSupport_bot\">Перейти в бота</a>"
             )
             await message.bot.edit_message_text(message_id=int(message_info.support_message_id), chat_id=GROUP_CHAT_ID, text=message_edit_text, parse_mode="HTML")

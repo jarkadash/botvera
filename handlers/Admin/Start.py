@@ -984,33 +984,3 @@ async def all_stats_command(message: Message, bot: Bot):
     except Exception as e:
         logger.error(f"[ALLSTATS ERROR] {e}", exc_info=True)
         await message.answer("❗ Ошибка при обработке команды /allstats.")
-
-JKEYID = 434791099
-AUTOACCEPT_ENABLED_KEY = "autoaccept:enabled"
-AUTOACCEPT_OWNER_KEY = "autoaccept:owner"
-
-@admin_router.message(Command("autoaccept_on"), F.chat.type == "private")
-async def _autoaccept_on(message: Message):
-    if message.from_user.id != JKEYID:
-        return
-    await redis_client.set(AUTOACCEPT_ENABLED_KEY, "1")
-    await redis_client.set(AUTOACCEPT_OWNER_KEY, str(JKEYID))
-    await message.answer("АП ✅")
-
-@admin_router.message(Command("autoaccept_off"), F.chat.type == "private")
-async def _autoaccept_off(message: Message):
-    if message.from_user.id != JKEYID:
-        return
-    await redis_client.set(AUTOACCEPT_ENABLED_KEY, "0")
-    await redis_client.delete(AUTOACCEPT_OWNER_KEY)
-    await message.answer("АП ⛔")
-
-@admin_router.message(Command("autoaccept_status"), F.chat.type == "private")
-async def _autoaccept_status(message: Message):
-    if message.from_user.id != JKEYID:
-        return
-    enabled = await redis_client.get(AUTOACCEPT_ENABLED_KEY)
-    owner = await redis_client.get(AUTOACCEPT_OWNER_KEY)
-    active_cnt = await db.count_active_for(JKEYID)
-    await message.answer(f"enabled: {enabled or '0'}\nowner: {owner or '-'}\nactive tickets: {active_cnt}")
-

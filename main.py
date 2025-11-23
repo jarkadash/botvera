@@ -40,10 +40,10 @@ bot = Bot(token=token, default=DefaultBotProperties(parse_mode='HTML'))
 dp = Dispatcher(storage=storage)
 
 async def start_up(bot: Bot):
-    await bot.send_message(chat_id=776952103, text='Бот запущен')
+    await bot.send_message(chat_id=434791099, text='Бот запущен')
 
 async def stop_up(bot: Bot):
-    await bot.send_message(chat_id=776952103, text='Бот остановлен')
+    await bot.send_message(chat_id=434791099, text='Бот остановлен')
 
 dp.startup.register(start_up)
 dp.shutdown.register(stop_up)

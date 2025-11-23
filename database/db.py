@@ -271,7 +271,7 @@ class DataBase:
                     'created_at': new_order.created_at.strftime("%d-%m-%Y %H:%M")
                 }
             except Exception as e:
-                logger.error(Fore.RED + f'Ошибка при добавлении заказа: {e}' + Style.RESET_ALL)
+                logger.error(Fore.RED + f'Ошибка при добавлении Тикета: {e}' + Style.RESET_ALL)
                 await session.rollback()
                 raise
                 return False
@@ -536,7 +536,7 @@ class DataBase:
     async def accept_orders(self, order_id, user_id):
         async with self.Session() as session:
             try:
-                # Получаем заказ
+                # Получаем заказ (проверка существования)
                 order = await session.get(Orders, order_id)
                 if not order:
                     logger.warning(f'Заказ {order_id} не найден!')
@@ -544,90 +544,104 @@ class DataBase:
                 elif order.status != 'new':
                     return 'Not-New'
 
-                # Получаем пользователя
-                user = await session.execute(select(Users).where(Users.user_id == user_id))
-                user = user.scalars().first()
+                # Получаем саппорта
+                user_result = await session.execute(
+                    select(Users).where(Users.user_id == user_id)
+                )
+                user = user_result.scalars().first()
                 if not user:
-                    logger.warning(f'Пользователь {user_id} не найден!')
                     return False
-                order_active = await session.execute(
+
+                # Проверяем активный тикет
+                order_active_result = await session.execute(
                     select(Orders).filter(
                         Orders.support_id == user_id,
                         Orders.status.in_(['at work'])
                     )
                 )
-                order_active = order_active.scalars().first()  # Получаем первый результат или None, если ничего не найдено
-
+                order_active = order_active_result.scalars().first()
                 if order_active is not None:
-                    logger.warning(
-                        Fore.RED + f'Пользователь {user_id} уже работает над другим заказом!' + Style.RESET_ALL)
                     return 'Active-Ticket'
 
-                # Проверка роли пользователя
+                # Проверяем роль и права по сервису
                 if user.role_id is None:
-                    logger.warning(f'Пользователь {user_id} без роли!')
                     return False
 
-                # Получаем услугу
                 service = await session.get(Services, order.service_id)
                 if not service or not service.allowed_roles:
-                    logger.warning(f'Услуга {order.service_id} не найдена или не настроены роли!')
                     return False
 
-                # Парсим разрешенные роли
                 try:
                     allowed_roles = {
-                        int(role.strip()) for role in service.allowed_roles.replace('.', ',').split(',')
-                        if role.strip().isdigit()  # Проверяем, что строка — это число
+                        int(role.strip())
+                        for role in service.allowed_roles.replace('.', ',').split(',')
+                        if role.strip().isdigit()
                     }
                 except ValueError as e:
-                    logger.error(f'Ошибка парсинга ролей: {e}')
+                    logger.error(f'Ошибка парсинга allowed_roles: {e}')
                     await session.rollback()
                     raise
-                    return False
 
-                logger.debug(f'Разрешенные роли: {allowed_roles}, Роль пользователя: {user.role_id}')
-
-                # Проверяем наличие роли в разрешенных
                 if user.role_id not in allowed_roles:
-                    logger.warning(f'Доступ запрещен для роли {user.role_id}!')
                     return False
-                time.sleep(1)
-                await session.refresh(order)
-                if order.status != 'new':
-                    logger.warning(f'Заказ {order_id} уже был принят!')
-                    await session.rollback()
-                    return 'Not-New'
-                # Обновление заказа
-                order.support_id = user_id
-                order.support_name = user.username
-                order.status = 'at work'
-                order.accept_at = datetime.now()
 
-                # Асинхронные операции с Redis
-                await asyncio.gather(
-                    redis_client.set(f"chat:{order.client_id}", order.support_id),
-                    redis_client.set(f"chat:{order.support_id}", order.client_id),
-                    redis_client.set(f"role:{order.client_id}", "user"),
-                    redis_client.set(f"role:{order.support_id}", "support"),
-                    redis_client.set(f"ticket:{order.client_id}", order_id),
-                    redis_client.set(f"ticket:{order.support_id}", order_id),
+                # === АТОМАРНОЕ принятие тикета ===
+                result = await session.execute(
+                    update(Orders)
+                    .where(Orders.id == order_id, Orders.status == 'new')
+                    .values(
+                        support_id=user_id,
+                        support_name=user.username,
+                        status='at work',
+                        accept_at=datetime.now()
+                    )
+                    .returning(Orders)
                 )
 
-                # Коммит изменений
-                await session.commit()
-                await session.refresh(order)
+                updated_order = result.scalar_one_or_none()
 
-                logger.info(Fore.GREEN + f'Заказ {order_id} успешно принят пользователем {user_id}' + Style.RESET_ALL)
-                return order
+                if updated_order is None:
+                    # Кто-то другой принял раньше
+                    await session.rollback()
+                    return 'Not-New'
+
+                # Делаем commit, чтобы данные гарантированно записались
+                await session.commit()
+
+                # === КРИТИЧЕСКОЕ ДОБАВЛЕНИЕ ===
+                # Полностью загружаем обновленный объект из базы
+                await session.refresh(updated_order)
+
+                # Отсоединяем ORM-объект от сессии,
+                # чтобы он не пытался лениво грузить данные после закрытия Session
+                session.expunge(updated_order)
+
+                # Redis — после подтверждённого обновления
+                await asyncio.gather(
+                    redis_client.set(f"chat:{updated_order.client_id}", updated_order.support_id),
+                    redis_client.set(f"chat:{updated_order.support_id}", updated_order.client_id),
+                    redis_client.set(f"role:{updated_order.client_id}", "user"),
+                    redis_client.set(f"role:{updated_order.support_id}", "support"),
+                    redis_client.set(f"ticket:{updated_order.client_id}", order_id),
+                    redis_client.set(f"ticket:{updated_order.support_id}", order_id),
+                )
+
+                logger.info(
+                    Fore.GREEN
+                    + f'Тикет №{order_id} успешно принят пользователем {user_id}'
+                    + Style.RESET_ALL
+                )
+
+                # Возвращаем безопасный detached ORM объект
+                return updated_order
 
             except Exception as e:
                 logger.error(f'Критическая ошибка: {e}', exc_info=True)
                 await session.rollback()
                 raise
-                return False
             finally:
                 await session.close()
+
 
     async def get_support(self, user_id):
         async with self.Session() as session:
@@ -728,7 +742,6 @@ class DataBase:
                     logger.warning(Fore.RED + f'Тикет {order_id} не найден!' + Style.RESET_ALL)
                     return False
 
-                # Защита от случайной отмены: отменять можно только если статус 'new'
                 if str(order.status).lower() != 'new':
                     logger.info(
                         Fore.YELLOW + f'Отмена тикета {order_id} отклонена: статус {order.status} не new' + Style.RESET_ALL)
@@ -956,7 +969,7 @@ class DataBase:
                     'service_name': order.service_name,
                     'client_name': order.client_name,
                     'client_id': order.client_id,
-                    'created_at': order.created_at.strftime('%d-%m-%Y %H:%M'),
+                    'created_at': order.created_at.strftime('%d-%m-%Y %H:%M:%S'),
                 }
 
             except Exception as e:
@@ -1238,16 +1251,16 @@ class DataBase:
                                 })
                             except Exception as msg_error:
                                 logger.warning(Fore.YELLOW +
-                                               f"Ошибка обработки сообщения для заказа {order.id}: {msg_error}" +
+                                               f"Ошибка обработки сообщения для Тикета № {order.id}: {msg_error}" +
                                                Style.RESET_ALL)
 
                         output.append(order_data)
                         success_count += 1
-                        logger.debug(Fore.GREEN + f"Обработан заказ {order.id}" + Style.RESET_ALL)
+                        logger.debug(Fore.GREEN + f"Обработан Тикет № {order.id}" + Style.RESET_ALL)
 
                     except Exception as order_error:
                         logger.error(Fore.RED +
-                                     f"Ошибка обработки заказа {order.id}: {order_error}" +
+                                     f"Ошибка обработки Тикета № {order.id}: {order_error}" +
                                      Style.RESET_ALL,
                                      exc_info=True)
 

@@ -63,8 +63,8 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                 f"🆔 <b>Support_id:</b> {accept.support_id}\n"
                 f"👨‍💻 <b>Support_name:</b> @{html.escape(accept.support_name)}\n"
                 f"ℹ️ <b>Статус:</b> {html.escape(accept.status)}\n"
-                f"⏳ <b>Создана:</b> {accept.created_at.strftime('%d-%m-%Y %H:%M')}\n\n"
-                f"⏳ <b>Принята:</b> {accept.accept_at.strftime('%d-%m-%Y %H:%M')}\n\n"
+                f"⏳ <b>Создана:</b> {accept.created_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
+                f"⏳ <b>Принята:</b> {accept.accept_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
                 f"<a href=\"https://t.me/GBPSupport_bot\">Перейти в бота</a>"
             )
             try:
@@ -111,10 +111,6 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                     )
 
                 await redis_client.set(f"ticket:{accept.support_id}", order_id)
-                try:
-                    await redis_client.delete(f"autoaccept:reserve:{order_id}")
-                except Exception:
-                    pass
 
                 await bot.send_message(
                     chat_id=call.from_user.id,
@@ -144,7 +140,7 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                     f"🆔 <b>Support_id:</b> {accept.support_id}\n"
                     f"👨‍💻 <b>Support_name:</b> @{html.escape(accept.support_name)}\n"
                     f"ℹ️ <b>Статус:</b> {html.escape(accept.status)}\n"
-                    f"⏳ <b>Создана:</b> {accept.created_at.strftime('%d-%m-%Y %H:%M')}\n\n"
+                    f"⏳ <b>Создана:</b> {accept.created_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
                     f"<b>Причина:</b> Пользователь заблокировал бота\n"
                 )
                 await db.get_auto_close_order(int(order_id), reason="Авто-закрытие (Заблокировал бота)")
@@ -210,7 +206,6 @@ async def cancel_order(call: CallbackQuery, state: FSMContext):
         if accept is False or accept == 'Пользователь не имеет роли!':
             await call.answer("У вас нет доступа к этому Тикету", show_alert=True)
         else:
-            # Проверяем статус тикета перед запросом причины
             order = await db.get_orders_by_id(order_id)
             if not order:
                 await call.answer("Тикет не найден", show_alert=True)
@@ -237,8 +232,12 @@ async def unpin_specific_message(bot: Bot, chat_id: int, message_id: int):
 
 @worker_router.message(TicketState.waiting_for_response)
 async def handle_ticket_response(message: Message, state: FSMContext, bot: Bot):
-    logger.info(Fore.RED + f"Пользователь {message.from_user.username} id: {message.from_user.id} "
-                           f"отменил тикет {message.text}" + Style.RESET_ALL)
+    logger.info(
+        Fore.YELLOW
+        + f"Пользователь {message.from_user.username} id:{message.from_user.id} "
+          f"отправил запрос на отмену тикета. Причина: {message.text}"
+        + Style.RESET_ALL
+    )
 
     reg_data = await state.get_data()
     order_id = reg_data.get('order_id')
@@ -248,26 +247,36 @@ async def handle_ticket_response(message: Message, state: FSMContext, bot: Bot):
         await message.answer("⛔️ Текст отмены должен быть больше 100 символов!")
         return
 
-    # Повторная проверка статуса перед отменой (вдруг тикет приняли пока вводили причину)
     order = await db.get_orders_by_id(order_id)
     if not order:
         await message.answer("Тикет не найден.")
         await state.clear()
         return
     if str(order.status).lower() != 'new':
-        await message.answer("Ошибка: статус не new")
+        await message.answer("Ошибка при попытке отмены тикета: статус не new")
         await state.clear()
         return
 
     try:
         cancel = await db.cancel_order(order_id, int(message.from_user.id), description)
         if cancel == 'STATUS_NOT_NEW':
-            await message.answer("Ошибка: статус не new")
+            await message.answer("Ошибка при попытке отмены тикета: статус не new")
+            logger.warning(
+                Fore.CYAN
+                + f"Отмена тикета {order_id} отклонена — статус не NEW. "
+                  f"Текущий статус: {order.status}"
+                + Style.RESET_ALL
+            )
             await state.clear()
             return
         if cancel is False:
             await message.answer("❌ Произошла ошибка при отмене тикета. Попробуйте еще раз.")
         else:
+            logger.info(
+                Fore.GREEN
+                + f"Тикет {order_id} успешно отменён пользователем {message.from_user.id}"
+                + Style.RESET_ALL
+            )
             message_accept = (
                 f"⛔️ Тикет отменен!\n\n\n"
                 f"📩 <b>Тикет</b> №{order_id}\n"
@@ -279,8 +288,8 @@ async def handle_ticket_response(message: Message, state: FSMContext, bot: Bot):
                 f"🆔 <b>Support_id:</b> {cancel.support_id}\n"
                 f"👨‍💻 <b>Support_name:</b> @{cancel.support_name}\n"
                 f"ℹ️ <b>Статус:</b> {cancel.status}\n"
-                f"⏳ <b>Создана:</b> {cancel.created_at.strftime('%d-%m-%Y %H:%M')}\n\n"
-                f"⏳ <b>Отменена:</b> {cancel.completed_at.strftime('%d-%m-%Y %H:%M')}\n\n"
+                f"⏳ <b>Создана:</b> {cancel.created_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
+                f"⏳ <b>Отменена:</b> {cancel.completed_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
                 f"<b>Причина отмены:</b> {description}\n"
             )
 
@@ -294,7 +303,7 @@ async def handle_ticket_response(message: Message, state: FSMContext, bot: Bot):
             await state.clear()
 
     except Exception as e:
-        logger.error(Fore.RED + f"Ошибка при отмене тикет: {e}" + Style.RESET_ALL)
+        logger.error(Fore.RED + f"Ошибка при отмене тикета: {e}" + Style.RESET_ALL)
         await message.answer("❌ Произошла ошибка при отмене тикета. Попробуйте еще раз.")
         await state.clear()
 
@@ -410,9 +419,9 @@ def format_ticket_closed_message(order, reason: str) -> str:
         f"🆔 <b>Support_id:</b> {order.support_id}\n"
         f"👨‍💻 <b>Support_name:</b> @{order.support_name}\n"
         f"ℹ️ <b>Статус:</b> {order.status}\n"
-        f"⏳ <b>Создана:</b> {order.created_at.strftime('%d-%m-%Y %H:%M')}\n\n"
-        f"⏳ <b>Принята:</b> {order.accept_at.strftime('%d-%m-%Y %H:%M')}\n\n"
-        f"⏳ <b>Закрыта:</b> {order.completed_at.strftime('%d-%m-%Y %H:%M')}\n\n"
+        f"⏳ <b>Создана:</b> {order.created_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
+        f"⏳ <b>Принята:</b> {order.accept_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
+        f"⏳ <b>Закрыта:</b> {order.completed_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
         f"<a href=\"https://t.me/GBPSupport_bot\">Перейти в бота</a>"
     )
 

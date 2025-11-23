@@ -12,10 +12,6 @@ from logger import logger
 
 
 def is_auto_closed(ticket) -> bool:
-    """
-    Проверяет, является ли тикет автоматически закрытым по причинам
-    авто-закрытия бота или молчания.
-    """
     if not ticket.description:
         return False
     description = ticket.description.strip()
@@ -122,8 +118,6 @@ async def filter_tickets_for_statistics(session, support_id: int, start_date: da
             else:
                 included.append(ticket)
 
-    # Финальная лог-защита
     logger.info(f"[FILTER FINAL] support_id={support_id} => included={len(included)} excluded={len(excluded)}")
-
     return included, excluded
 

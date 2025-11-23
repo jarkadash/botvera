@@ -3,16 +3,14 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 def get_start_menu(lang: str) -> ReplyKeyboardMarkup:
     if lang == "en":
         menu_text = "📋 Menu"
-        accounts_text = "RUST Accounts"
         site_text = "GameBreaker🦊"
     else:
         menu_text = "📋 Меню"
-        accounts_text = "Аккаунты RUST"
         site_text = "GameBreaker🦊"
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=menu_text)],
-            [KeyboardButton(text=accounts_text), KeyboardButton(text=site_text, web_app=WebAppInfo(url='https://gamebreaker.ru'))]
+            [KeyboardButton(text=site_text, web_app=WebAppInfo(url='https://gamebreaker.ru'))]
         ],
         resize_keyboard=True
     )
