@@ -218,48 +218,6 @@ async def back_to_menu(call: CallbackQuery, state: FSMContext):
         pass
     await open_menu(call.message, state)
 
-@start_router.message(F.text.in_({'🆘 Помощь', '🆘 Help'}))
-async def help(message: Message):
-    lang = await _get_lang(message.from_user.id)
-    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} находится в разделе помощи' + Style.RESET_ALL)
-    if lang == "en":
-        txt = (
-            "You are already in our support bot.\n"
-            "Do you want another virtual meeting with yourself? 🤨\n"
-            "Choose a service from the menu.\n\n"
-            "Hint:\n"
-            "/start — restart the bot\n"
-            "/stop_chat — stop dialog with support\n"
-        )
-    else:
-        txt = (
-            "Ты и так уже в нашем боте-поддержке, дружище!\n"
-            "Что, хочешь устроить еще одну виртуальную встречу с самим собой? 🤨 \n"
-            "😈 Выбери услугу из меню и не нажимай больше на кнопку помощи 😎😜\n\n"
-            "Подсказка:\n"
-            "/start - перезагрузить бота\n"
-            "/stop_chat - остановить диалог с сапортом\n"
-        )
-    await message.answer(txt, parse_mode='HTML')
-
-@start_router.message(F.text.in_({'📩 Жалоба', '📩 Complaint'}))
-async def help(message: Message):  # имя сохранено как в исходнике
-    lang = await _get_lang(message.from_user.id)
-    logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} находится в разделе помощи' + Style.RESET_ALL)
-    if lang == "en":
-        txt = (
-            "Complain here <a href=\"https://telefon-doveria.ru/teenagers/\">BOT ADMINISTRATION</a> 🤨\n"
-            "Choose a service from the menu."
-        )
-    else:
-        txt = (
-            "Ты совсем уже?\n"
-            "<a href=\"https://telefon-doveria.ru/teenagers/\">АДМИНИСТРАЦИЯ БОТА</a> 🤨\n"
-            "А здесь заходи не бойся, выходи не плачь!\n\n"
-            "😈 Выбери услугу из меню и не нажимай больше на кнопку жалоба, пацаны не жалуются😎😜"
-        )
-    await message.answer(txt, parse_mode='HTML', disable_web_page_preview=True)
-
 pinned_messages = {}
 
 async def pin_message(bot: Bot, chat_id: int, message_id: int):
