@@ -351,8 +351,6 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             support_mentions = ", ".join([f"@{support.username}" for support in supports])
             tread_id = GROUP_CHAT_ID_TIKETS_SUPPORT
 
-        logger.info(Fore.BLUE + f'{support_mentions}' + Style.RESET_ALL)
-
         message_send_support = (
             f"📩 <b>Тикет</b> №{add_order['id']}\n"
             f"👤 <b>Пользователь:</b> @{add_order['client_name']}\n"
@@ -365,12 +363,20 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
             f"{support_mentions}\n"
             f"⚡ <b>Нажмите 'Принять', чтобы взять Тикет в работу.</b>"
         )
-
         keyboard_admin = InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="✅ Принять Тикет", callback_data=f"accept_order:{add_order['id']}")],
                 [InlineKeyboardButton(text="🗑 Отклонить Тикет", callback_data=f"cancel_order:{add_order['id']}")]
             ]
+        )
+
+        logger.info(
+            Fore.BLUE +
+            f"Создан тикет №{add_order['id']} | "
+            f"Пользователь: @{add_order['client_name']} ({add_order['client_id']}) | "
+            f"Услуга: {add_order['service_name']} | "
+            f"Время создания: {add_order['created_at']}" +
+            Style.RESET_ALL
         )
 
         support_message = await call.bot.send_message(

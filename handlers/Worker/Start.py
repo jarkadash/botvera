@@ -19,7 +19,6 @@ from aiogram.filters import Filter
 from sqlalchemy import select
 from database.models import Roles, Users
 import pandas as pd
-
 db = DataBase()
 active_timers = {}
 worker_router = Router()
@@ -41,7 +40,7 @@ class TicketState(StatesGroup):
 @worker_router.callback_query(F.data.startswith("accept_order:"))
 async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
     logger.info(Fore.GREEN + f"Пользователь {call.from_user.username} id: {call.from_user.id} пытается принять "
-                             f"тикет {call.data.split(':')[1]}" + Style.RESET_ALL)
+                             f"тикет №{call.data.split(':')[1]}" + Style.RESET_ALL)
     order_id = int(call.data.split(":")[1])
     try:
         accept = await db.accept_orders(order_id, int(call.from_user.id))
@@ -198,7 +197,7 @@ async def handle_support_contact(message: Message, bot: Bot):
 @worker_router.callback_query(F.data.startswith("cancel_order:"))
 async def cancel_order(call: CallbackQuery, state: FSMContext):
     logger.info(Fore.RED + f"Пользователь {call.from_user.username} id: {call.from_user.id} пытается отменить "
-                           f"Тикет {call.data.split(':')[1]}" + Style.RESET_ALL)
+                           f"Тикет №{call.data.split(':')[1]}" + Style.RESET_ALL)
     order_id = int(call.data.split(":")[1])
     await state.update_data(order_id=order_id)
     try:
@@ -274,7 +273,7 @@ async def handle_ticket_response(message: Message, state: FSMContext, bot: Bot):
         else:
             logger.info(
                 Fore.GREEN
-                + f"Тикет {order_id} успешно отменён пользователем {message.from_user.id}"
+                + f"Тикет №{order_id} успешно отменён пользователем {message.from_user.id}"
                 + Style.RESET_ALL
             )
             message_accept = (
