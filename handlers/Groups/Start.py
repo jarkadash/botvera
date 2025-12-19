@@ -208,7 +208,7 @@ async def reinstall_support_chat(call: CallbackQuery):
     result = await db.get_user(call.from_user.id, call.from_user.username)
     if result != 'admin':
         return await call.answer("Вы не администратор", show_alert=True)
-    logger.info(f"Пользователь, пере привязывает группу для саппорта {call.data.split("_")[2]}")
+    logger.info(f'Пользователь, пере привязывает группу для саппорта {call.data.split("_")[2]}')
 
     support_id = int(call.data.split("_")[2])
     group_id = call.message.chat.id
