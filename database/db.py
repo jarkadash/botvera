@@ -17,7 +17,9 @@ from colorama import Fore, Style
 import os
 from datetime import datetime, timedelta
 from sqlalchemy import text
+from handlers.Groups.create_topic_in_group import GroupManager, group_manager
 
+gp = GroupManager()
 
 load_dotenv()
 
@@ -38,6 +40,7 @@ DEFAULT_RATES = {
     "bonus_per_50": 1000
 }
 
+
 def seconds_to_hms(seconds: float) -> str:
     """
     Конвертирует количество секунд в строку формата HH:MM:SS.
@@ -56,7 +59,6 @@ def seconds_to_hms(seconds: float) -> str:
 
 class DataBase:
 
-
     async def count_active_for(self, support_id: int) -> int:
         async with self.Session() as session:
             try:
@@ -74,6 +76,7 @@ class DataBase:
                 raise
             finally:
                 await session.close()
+
     def __init__(self):
         self.db_host = os.getenv('DB_HOST')
         self.db_port = os.getenv('DB_PORT')
@@ -96,7 +99,7 @@ class DataBase:
     async def create_db(self):
         try:
             async with self.async_engine.begin() as conn:
-                #await conn.run_sync(Base.metadata.create_all)
+                await conn.run_sync(Base.metadata.create_all)
                 await self.add_initial_db()
                 logger.info(Fore.BLUE + f'База данных создана(загружена)!' + Style.RESET_ALL)
         except Exception as e:
@@ -210,7 +213,6 @@ class DataBase:
                 return int(result.scalar() or 0)
             finally:
                 await session.close()
-
 
     async def get_banned_users(self, user_id):
         async with self.Session() as session:
@@ -550,25 +552,21 @@ class DataBase:
                 )
                 user = user_result.scalars().first()
                 if not user:
+                    logger.warning(f'Пользователь {user_id} не найден')
                     return False
 
-                # Проверяем активный тикет
-                order_active_result = await session.execute(
-                    select(Orders).filter(
-                        Orders.support_id == user_id,
-                        Orders.status.in_(['at work'])
-                    )
-                )
-                order_active = order_active_result.scalars().first()
-                if order_active is not None:
-                    return 'Active-Ticket'
+                # Сохраняем username ДО любых операций с базой, которые могут закрыть сессию
+                support_username = user.username  # ЗАГРУЖАЕМ СЕЙЧАС!
+
 
                 # Проверяем роль и права по сервису
                 if user.role_id is None:
+                    logger.warning(f'У пользователя {user_id} нет роли')
                     return False
 
                 service = await session.get(Services, order.service_id)
                 if not service or not service.allowed_roles:
+                    logger.warning(f'Сервис {order.service_id} не найден или нет разрешенных ролей')
                     return False
 
                 try:
@@ -579,10 +577,10 @@ class DataBase:
                     }
                 except ValueError as e:
                     logger.error(f'Ошибка парсинга allowed_roles: {e}')
-                    await session.rollback()
                     raise
 
                 if user.role_id not in allowed_roles:
+                    logger.warning(f'Роль {user.role_id} не разрешена для сервиса {service.id}')
                     return False
 
                 # === АТОМАРНОЕ принятие тикета ===
@@ -591,7 +589,7 @@ class DataBase:
                     .where(Orders.id == order_id, Orders.status == 'new')
                     .values(
                         support_id=user_id,
-                        support_name=user.username,
+                        support_name=support_username,  # Используем сохраненное имя
                         status='at work',
                         accept_at=datetime.now()
                     )
@@ -601,47 +599,151 @@ class DataBase:
                 updated_order = result.scalar_one_or_none()
 
                 if updated_order is None:
-                    # Кто-то другой принял раньше
-                    await session.rollback()
+                    logger.info(f'Тикет {order_id} уже был принят другим саппортом')
                     return 'Not-New'
 
-                # Делаем commit, чтобы данные гарантированно записались
+                # Получаем группу
+                get_id_group = await self.get_id_groups(user.id)
+                if get_id_group is False:
+                    logger.warning(f'Не найдена группа для пользователя {user.id}')
+                    await session.rollback()
+                    return False
+
+                # Проверяем, инициализирован ли бот
+                if group_manager.bot is None:
+                    logger.error("GroupManager не инициализирован: бот не установлен")
+                    await session.rollback()
+                    return False
+
+                # Создаем топик
+                thread_id, success = await group_manager.create_user_topic(
+                    order_id=order_id,
+                    group_id=get_id_group.group_id
+                )
+
+                if not success or thread_id is None:
+                    logger.error(f'Не удалось создать топик для заказа {order_id}')
+                    await session.rollback()
+                    return False
+
+                # Получаем клиента
+                if not hasattr(order, 'client_id') or order.client_id is None:
+                    logger.error(f'У заказа {order_id} нет client_id')
+                    await session.rollback()
+                    return False
+
+                query = select(Users).where(Users.user_id == order.client_id)
+                result = await session.execute(query)
+                client = result.scalars().first()
+                if not client:
+                    logger.error(f'Клиент {order.client_id} не найден в базе')
+                    await session.rollback()
+                    return False
+
+                # Добавляем запись о тикете в группе поддержки
+                add_tikets = TicketsIdSupportGroupsModel(
+                    order_id=order_id,
+                    group_id=get_id_group.id,
+                    thread_id=thread_id,
+                    support_id=user.id,
+                    user_id=client.id
+                )
+                session.add(add_tikets)
+                await session.flush()
+
+                # Делаем commit всех изменений
                 await session.commit()
 
-                # === КРИТИЧЕСКОЕ ДОБАВЛЕНИЕ ===
-                # Полностью загружаем обновленный объект из базы
+                # Обновляем и отсоединяем объект
                 await session.refresh(updated_order)
 
-                # Отсоединяем ORM-объект от сессии,
-                # чтобы он не пытался лениво грузить данные после закрытия Session
+                # ВАЖНО: Загружаем все ленивые атрибуты ПЕРЕД отсоединением
+                if hasattr(updated_order, 'client_name'):
+                    _ = updated_order.client_name  # Загружаем
+                if hasattr(updated_order, 'service_name'):
+                    _ = updated_order.service_name  # Загружаем
+                if hasattr(updated_order, 'support_name'):
+                    _ = updated_order.support_name  # Загружаем
+
                 session.expunge(updated_order)
 
-                # Redis — после подтверждённого обновления
-                await asyncio.gather(
-                    redis_client.set(f"chat:{updated_order.client_id}", updated_order.support_id),
-                    redis_client.set(f"chat:{updated_order.support_id}", updated_order.client_id),
-                    redis_client.set(f"role:{updated_order.client_id}", "user"),
-                    redis_client.set(f"role:{updated_order.support_id}", "support"),
-                    redis_client.set(f"ticket:{updated_order.client_id}", order_id),
-                    redis_client.set(f"ticket:{updated_order.support_id}", order_id),
-                )
-
                 logger.info(
-                    Fore.GREEN
-                    + f'Тикет №{order_id} успешно принят пользователем {user_id}'
-                    + Style.RESET_ALL
+                    f'Тикет №{order_id} успешно принят пользователем {support_username} ({user_id}). '
+                    f'Создана тема в группе: {get_id_group.group_id}, thread_id: {thread_id}'
                 )
 
-                # Возвращаем безопасный detached ORM объект
-                return updated_order
+                return {"updated_order": updated_order, "group_id": get_id_group.group_id, "thread_id": thread_id}
 
             except Exception as e:
-                logger.error(f'Критическая ошибка: {e}', exc_info=True)
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+                logger.error(f'Критическая ошибка в accept_orders: {e}', exc_info=True)
+                if session.in_transaction():
+                    await session.rollback()
+                return False
 
+    async def get_latest_topic_info(self, support_id):
+        """
+        Получает thread_id и group_id последнего топика для саппорта
+        """
+        try:
+            async with self.Session() as session:
+                query = (
+                    select(
+                        TicketsIdSupportGroupsModel.thread_id,
+                        GroupsSupportModel.group_id
+                    )
+                    .join(GroupsSupportModel, GroupsSupportModel.id == TicketsIdSupportGroupsModel.group_id)
+                    .where(TicketsIdSupportGroupsModel.support_id == support_id)
+                    .order_by(TicketsIdSupportGroupsModel.created_at.desc())
+                    .limit(1)
+                )
+
+                result = await session.execute(query)
+                row = result.first()
+
+                if row:
+                    # row - это кортеж (thread_id, group_id)
+                    thread_id, group_id = row
+                    return {
+                        'thread_id': thread_id.thread_id,
+                        'group_id': group_id.group_id
+                    }
+                return None
+
+        except Exception as e:
+            logger.error(f"Ошибка при получении информации о топике: {e}")
+            return None
+
+    async def get_add_tikets_in_group_support(self, thread_id, group_id, support_id, client_id):
+        try:
+            async with self.Session() as session:
+                add_tikets = TicketsIdSupportGroupsModel(
+                    group_id=group_id,
+                    thread_id=thread_id,
+                    support_id=support_id,
+                    user_id=client_id
+                )
+
+                session.add(add_tikets)
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f'Критическая ошибка: {e}', exc_info=True)
+            await session.rollback()
+            return False
+        finally:
+            await session.close()
+
+    async def get_id_groups(self, user_id):
+        try:
+            async with self.Session() as session:
+                query = select(GroupsSupportModel).where(GroupsSupportModel.support_id == user_id)
+                result = await session.execute(query)
+                groups = result.scalars().first()
+                return groups if groups is not None else False
+
+        except Exception as e:
+            logger.error(f"Ошибка при получении id группы: {e}")  # Исправлена f-строка
+            return False
 
     async def get_support(self, user_id):
         async with self.Session() as session:
@@ -671,6 +773,16 @@ class DataBase:
                 if order.status in ['at work', 'paused']:
                     order.status = 'closed'
                     order.completed_at = datetime.now()
+                    result = await session.execute(
+                        select(TicketsIdSupportGroupsModel)
+                        .where(TicketsIdSupportGroupsModel.order_id == order_id)
+                    )
+                    topic = result.scalar_one_or_none()
+
+                    # Удаляем если найдена
+                    if topic:
+                        await session.delete(topic)
+                        await session.commit()
                     await session.commit()
                     await session.refresh(order)
 
@@ -775,7 +887,31 @@ class DataBase:
                     order.accept_at = datetime.now()
                 order.completed_at = datetime.now()
                 order.description = reason
+
+                result = await session.execute(
+                    select(TicketsIdSupportGroupsModel)
+                    .join(
+                        GroupsSupportModel,
+                        GroupsSupportModel.id == TicketsIdSupportGroupsModel.group_id
+                    )
+                    .where(TicketsIdSupportGroupsModel.order_id == order_id)
+                )
+                row = result.first()
+                if row:
+                    ticket, group = row
+                    thread_id = ticket.thread_id
+                    support_group_id = group.id  # ID из GroupsSupportModel
+                    group_name = group.name  # Дополнительные поля группы
+
+                    print(f"Thread: {thread_id}, Group ID: {support_group_id}, Name: {group_name}")
+
+                    await session.delete(ticket)
+                    await session.commit()
+
+
                 await session.commit()
+                return {"thread_id":thread_id, "group_id":support_group_id, "order_id":order_id}
+
             except Exception as e:
                 logger.error(Fore.RED + f'Ошибка: {e}' + Style.RESET_ALL)
                 await session.rollback()
@@ -869,7 +1005,8 @@ class DataBase:
                 if bonus_per_50 and total >= 50:
                     estimated_salary += (total // 50) * bonus_per_50
                 valid_dicts = [order_to_dict(o) for o in tickets]
-                excluded_dicts = [order_to_dict(ticket) | {"excluded_reason": reason} for ticket, reason in excluded_orders]
+                excluded_dicts = [order_to_dict(ticket) | {"excluded_reason": reason} for ticket, reason in
+                                  excluded_orders]
 
                 stats = {
                     "all_orders": total_all_time,
@@ -1319,13 +1456,11 @@ class DataBase:
             )
             await session.commit()
 
-
     async def create_payment_rate(self, user_id: int):
         async with self.Session() as session:
             new_rate = PaymentRates(support_id=user_id, **DEFAULT_RATES)
             session.add(new_rate)
             await session.commit()
-
 
     async def delete_payment_rate(self, support_id: int):
         async with self.Session() as session:
@@ -1437,7 +1572,6 @@ class DataBase:
                 if bonus_per_50 and total >= 50:
                     estimated_salary += (total // 50) * bonus_per_50
 
-
                 # Формируем финальный словарь статистики
                 stats = {
                     "all_orders": total_all_time,
@@ -1454,3 +1588,467 @@ class DataBase:
             logger.error(f"[ERROR] Ошибка при расчете статистики: {e}", exc_info=True)
             return {"error": f"Внутренняя ошибка сервера: {e}"}
 
+    async def get_support_not_assigned_group(self):
+        try:
+            async with self.Session() as session:
+                # Подзапрос: саппорты, которые уже имеют группу
+                subquery = select(GroupsSupportModel.support_id).distinct()
+
+                # Основной запрос: саппорты, которых нет в подзапросе
+                query = select(Users).join(
+                    Roles, Users.role_id == Roles.id
+                ).where(
+                    or_(  # Используем or_ из sqlalchemy
+                        Roles.role_name == 'support',
+                        Roles.role_name == 'admin'
+                    ),
+                    Users.id.not_in(subquery)  # Сравниваем Users.id с support_id
+                ).order_by(
+                    Users.username
+                )
+                result = await session.execute(query)
+                return result.scalars().all()
+        except Exception as e:
+            logger.error(Fore.RED + f'Ошибка при получении не назначенных саппортов: {e}' + Style.RESET_ALL)
+            await session.rollback()
+        finally:
+            await session.close()
+
+    async def setup_support_groups(self, support_id: int, group_id: int):
+        """
+        Привязывает саппорта к группе с проверкой, что у саппорта нет других привязок
+        """
+        try:
+            async with self.Session() as session:
+                # 1. ПРОВЕРЯЕМ, ЕСТЬ ЛИ УЖЕ ПРИВЯЗКИ У ЭТОГО САППОРТА
+                existing_groups = await session.execute(
+                    select(GroupsSupportModel)
+                    .where(GroupsSupportModel.support_id == support_id)
+                )
+                existing_groups = existing_groups.scalars().all()
+
+                # Если у саппорта уже есть привязки, возвращаем информацию
+                if existing_groups:
+                    logger.warning(
+                        f'У саппорта ID {support_id} уже есть привязки к группам: {[g.group_id for g in existing_groups]}')
+                    return "Support-already-has-groups"  # Или можно вернуть список существующих групп
+
+                # 2. ПРОВЕРЯЕМ, НЕ ПРИВЯЗАНА ЛИ УЖЕ ЭТА ГРУППА К ДРУГОМУ САППОРТУ
+                existing_support = await session.execute(
+                    select(GroupsSupportModel)
+                    .where(GroupsSupportModel.group_id == group_id)
+                )
+                existing_support = existing_support.scalar_one_or_none()
+
+                if existing_support:
+                    logger.warning(f'Группа ID {group_id} уже привязана к саппорту ID {existing_support.support_id}')
+                    return "The group is linked to another support account"
+
+                # 3. СОЗДАЕМ НОВУЮ ПРИВЯЗКУ (только если проверки пройдены)
+                new_setup_support_in_group = GroupsSupportModel(
+                    support_id=support_id,
+                    group_id=group_id,
+                )
+                session.add(new_setup_support_in_group)
+                await session.commit()
+
+                logger.info(f'Саппорт ID {support_id} успешно привязан к группе ID {group_id}')
+                return True
+
+        except Exception as e:
+            logger.error(Fore.RED + f'Ошибка при привязке саппорта к группе: {e}' + Style.RESET_ALL)
+            await session.rollback()
+            return False
+        finally:
+            await session.close()
+
+    async def get_support_assigned_group(self):
+        try:
+            async with self.Session() as session:
+                query = select(Users).join(
+                    Roles, Users.role_id == Roles.id
+                ).where(
+                    or_(  # Используем or_ из sqlalchemy
+                        Roles.role_name == 'support',
+                        Roles.role_name == 'admin'
+                    )
+                ).order_by(
+                    Users.username
+                )
+                result = await session.execute(query)
+                return result.scalars().all()
+        except Exception as e:
+            logger.error(Fore.RED + f'Ошибка при получении всех саппортов: {e}' + Style.RESET_ALL)
+            await session.rollback()
+        finally:
+            await session.close()
+
+    async def reinstall_group(self, support_id: int, group_id: int) -> bool:
+        """Перепривязать саппорта к группе (безопасная версия)"""
+        try:
+            async with self.Session() as session:
+                # 1. НАХОДИМ ПЕРВУЮ ЗАПИСЬ ДЛЯ ЭТОГО САППОРТА
+                existing_support_result = await session.execute(
+                    select(GroupsSupportModel)
+                    .where(GroupsSupportModel.support_id == support_id)
+                    .limit(1)
+                )
+                existing_support = existing_support_result.scalar_one_or_none()
+
+                if existing_support:
+                    # 2. ОБНОВЛЯЕМ СУЩЕСТВУЮЩУЮ ЗАПИСЬ
+                    old_group_id = existing_support.group_id
+                    existing_support.group_id = group_id
+                    logger.info(f"🔄 Обновлена группа для саппорта {support_id}: {old_group_id} → {group_id}")
+
+                    # 3. ПРОВЕРЯЕМ, ЕСТЬ ЛИ ДРУГАЯ ЗАПИСЬ С ЭТОЙ ГРУППОЙ
+                    other_group_result = await session.execute(
+                        select(GroupsSupportModel)
+                        .where(
+                            GroupsSupportModel.group_id == group_id,
+                            GroupsSupportModel.id != existing_support.id
+                        )
+                    )
+                    other_group = other_group_result.scalar_one_or_none()
+
+                    if other_group:
+                        # Обновляем другую запись на старую группу или удаляем
+                        other_group.group_id = old_group_id if old_group_id != group_id else None
+                        logger.info(f"🔄 Переназначена группа {group_id} для саппорта {other_group.support_id}")
+
+                else:
+                    # 4. ЕСЛИ НЕТ ЗАПИСИ ДЛЯ САППОРТА, ПРОВЕРЯЕМ ГРУППУ
+                    existing_group_result = await session.execute(
+                        select(GroupsSupportModel)
+                        .where(GroupsSupportModel.group_id == group_id)
+                        .limit(1)
+                    )
+                    existing_group = existing_group_result.scalar_one_or_none()
+
+                    if existing_group:
+                        # Обновляем существующую запись группы
+                        old_support_id = existing_group.support_id
+                        existing_group.support_id = support_id
+                        logger.info(f"🔄 Обновлен саппорт для группы {group_id}: {old_support_id} → {support_id}")
+                    else:
+                        # Создаем новую запись
+                        new_record = GroupsSupportModel(
+                            support_id=support_id,
+                            group_id=group_id
+                        )
+                        session.add(new_record)
+                        logger.info(f"✅ Создана новая привязка {support_id} → {group_id}")
+
+                await session.commit()
+                return True
+
+        except Exception as e:
+            logger.error(f'Ошибка при перепривязке саппорта к группе: {e}')
+            await session.rollback()
+            return False
+        finally:
+            await session.close()
+
+    async def get_chat_by_thread_id(self, thread_id: int):
+        """Получает информацию о чате по ID темы"""
+        try:
+            async with self.Session() as session:
+                query = select(TicketsIdSupportGroupsModel).where(
+                    TicketsIdSupportGroupsModel.thread_id == thread_id
+                ).limit(1)  # Добавляем limit для безопасности
+
+                result = await session.execute(query)
+                topic_mapping = result.scalar_one_or_none()
+
+                if not topic_mapping:
+                    logger.warning(f"Топик {thread_id} не найден в БД")
+                    return None
+
+                # Получаем информацию о клиенте
+                client_query = select(Users).where(Users.id == topic_mapping.user_id).limit(1)
+                client_result = await session.execute(client_query)
+                client = client_result.scalar_one_or_none()
+
+                if not client:
+                    logger.error(f"Клиент с id {topic_mapping.user_id} не найден")
+                    return None
+
+                # Получаем информацию о группе
+                group_query = select(GroupsSupportModel).where(
+                    GroupsSupportModel.id == topic_mapping.group_id
+                ).limit(1)
+                group_result = await session.execute(group_query)
+                group = group_result.scalar_one_or_none()
+
+                if not group:
+                    logger.error(f"Группа {topic_mapping.group_id} не найдена")
+                    return None
+
+                # ВАЖНО: Проверяем названия полей в модели Users
+                # Если поле называется user_id (Telegram ID), то client.user_id
+                # Если поле называется id (Telegram ID), то client.id
+                # Скорее всего, это client.user_id
+
+                telegram_client_id = None
+                if hasattr(client, 'user_id'):
+                    telegram_client_id = client.user_id  # Telegram ID
+                elif hasattr(client, 'id'):
+                    telegram_client_id = client.id  # Telegram ID
+                else:
+                    logger.error(f"У клиента нет поля user_id или id: {client}")
+                    return None
+
+                logger.info(f"Найден клиент: TG ID={telegram_client_id}, DB ID={client.id}")
+
+                return {
+                    'thread_id': thread_id,
+                    'group_id': group.group_id,  # Telegram ID группы
+                    'client_id': telegram_client_id,  # Telegram ID клиента
+                    'support_id': topic_mapping.support_id,
+                    'user_db_id': client.id,  # ID в таблице Users (БД)
+                    'order_id': topic_mapping.order_id,
+                    'client_username': getattr(client, 'username', None)
+                }
+
+        except Exception as e:
+            logger.error(f"Ошибка получения чата по thread_id {thread_id}: {e}", exc_info=True)
+            return None
+
+    async def get_chats(self, thread_id: int = None, client_telegram_id: int = None):
+        """Универсальный метод получения чата"""
+        try:
+            async with self.Session() as session:
+                if thread_id:
+                    # Поиск по thread_id
+                    query = select(TicketsIdSupportGroupsModel).where(
+                        TicketsIdSupportGroupsModel.thread_id == thread_id
+                    )
+                    result = await session.execute(query)
+                    topic_mapping = result.scalar_one_or_none()
+
+                    if topic_mapping:
+                        # Получаем Telegram ID клиента
+                        user_query = select(Users).where(Users.id == topic_mapping.user_id)
+                        user_result = await session.execute(user_query)
+                        user = user_result.scalar_one_or_none()
+
+                        if user:
+                            return user.user_id  # Telegram ID клиента
+
+                    return "no-found-chat"
+
+                elif client_telegram_id:
+                    # Поиск по Telegram ID клиента
+                    user_query = select(Users).where(Users.user_id == client_telegram_id)
+                    user_result = await session.execute(user_query)
+                    user = user_result.scalar_one_or_none()
+
+                    if not user:
+                        return "no-found-chat"
+
+                    # Ищем последний активный топик
+                    query = select(TicketsIdSupportGroupsModel).where(
+                        TicketsIdSupportGroupsModel.user_id == user.id
+                    ).order_by(TicketsIdSupportGroupsModel.created_at.desc())
+
+                    result = await session.execute(query)
+                    topic_mapping = result.scalar_one_or_none()
+
+                    if topic_mapping:
+                        return topic_mapping.thread_id
+
+                    return "no-found-chat"
+
+                return None
+        except Exception as e:
+            logger.error(f"Ошибка получения chats: {e}")
+            return None
+
+    async def get_active_ticket_for_user(self, user_telegram_id: int):
+        """Получает активный тикет пользователя по его Telegram ID"""
+        try:
+            async with self.Session() as session:
+                query = select(Orders).where(
+                    Orders.client_id == user_telegram_id,
+                    Orders.status.in_(['new', 'at work'])  # Только активные статусы
+                ).order_by(Orders.created_at.desc())
+
+                result = await session.execute(query)
+                order = result.scalar_one_or_none()
+                return order
+        except Exception as e:
+            logger.error(f"Ошибка получения активного тикета пользователя {user_telegram_id}: {e}")
+            return None
+
+    async def get_chat_by_client_id(self, client_telegram_id: int):
+        """Получает информацию о чате по Telegram ID клиента"""
+        try:
+            async with self.Session() as session:
+                # 1. Находим пользователя
+                user_query = select(Users).where(Users.user_id == client_telegram_id)
+                user_result = await session.execute(user_query)
+                user_row = user_result.first()  # Возвращает кортеж или None
+
+                if not user_row:
+                    return None
+
+                user = user_row[0]  # Извлекаем объект Users из кортежа
+
+                # 2. Ищем последний топик
+                query = (
+                    select(TicketsIdSupportGroupsModel)
+                    .where(TicketsIdSupportGroupsModel.user_id == user.id)
+                    .order_by(TicketsIdSupportGroupsModel.created_at.desc())
+                )
+
+                result = await session.execute(query)
+                topic_row = result.first()  # Возвращает кортеж
+
+                if not topic_row:
+                    return None
+
+                topic_mapping = topic_row[0]  # Извлекаем объект TicketsIdSupportGroupsModel
+
+                # 3. Получаем информацию о группе
+                group_query = select(GroupsSupportModel).where(
+                    GroupsSupportModel.id == topic_mapping.group_id
+                )
+                group_result = await session.execute(group_query)
+                group_row = group_result.first()
+
+                if not group_row:
+                    return None
+
+                group = group_row[0]  # Извлекаем объект GroupsSupportModel
+
+                return {
+                    'thread_id': topic_mapping.thread_id,
+                    'group_id': group.group_id,
+                    'client_id': client_telegram_id,
+                    'support_id': topic_mapping.support_id,
+                    'order_id': getattr(topic_mapping, 'order_id', None),
+                    'user_db_id': user.id,
+                    'created_at': topic_mapping.created_at
+                }
+
+        except Exception as e:
+            logger.error(f"Ошибка получения чата клиента: {e}", exc_info=True)
+            return None
+
+
+    async def add_form_in_base(self,  order_id: int, name_game: str, name_cheat: str,
+                               problem_description: str, specifications: str):
+        try:
+            async with self.Session() as session:
+                add_form_in_base = FormTicketsUsersModel(
+                    order_id=order_id,
+                    name_game=name_game,
+                    name_cheat=name_cheat,
+                    problem_description=problem_description,
+                    specifications=specifications,
+                )
+
+                session.add(add_form_in_base)
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении формы в базу: {e}", exc_info=True)
+            await session.rollback()
+            return False
+        finally:
+            await session.close()
+
+    async def get_user_tickets_with_forms(self, user_id: int):
+        """
+        Получает все тикеты пользователя с формами
+        Возвращает список тикетов, которые имеют записи в form_tickets_users
+        """
+        try:
+            async with self.Session() as session:
+                # Получаем заказы пользователя, которые имеют форму
+                query = select(Orders, FormTicketsUsersModel, Users.username). \
+                    join(FormTicketsUsersModel, Orders.id == FormTicketsUsersModel.order_id). \
+                    join(Users, Orders.client_id == Users.user_id). \
+                    where(
+                    Orders.client_id == user_id
+                ). \
+                    order_by(Orders.id.desc())
+
+                result = await session.execute(query)
+                tickets = result.all()
+
+                if not tickets:
+                    return None
+
+                # Преобразуем в удобный формат с конвертацией datetime в строку
+                ticket_list = []
+                for order, form, username in tickets:
+                    ticket_list.append({
+                        'ticket_id': order.id,
+                        'user_id': order.client_id,
+                        'username': username or "Не указан",
+                        'status': order.status,
+                        'created_at': order.created_at.isoformat() if order.created_at else None,
+                        # ← Конвертируем в строку
+                        'form': {
+                            'name_cheat': form.name_cheat,
+                            'name_game': form.name_game,
+                            'specifications': form.specifications,
+                            'problem_description': form.problem_description,
+                            'created_at': form.created_at.isoformat() if form.created_at else None
+                            # ← Конвертируем в строку
+                        }
+                    })
+
+                return ticket_list
+
+        except Exception as e:
+            logger.error(f"Ошибка при получении тикетов пользователя: {e}", exc_info=True)
+            return None
+        finally:
+            await session.close()
+
+    async def get_tickets_statistics(self):
+        """
+        Получает статистику по тикетам:
+        - Новые тикеты (статус 'New')
+        - В работе (статус 'At work')
+        - Общее количество за последние 24 часа
+        """
+        try:
+            async with self.Session() as session:
+                from datetime import datetime, timedelta
+
+                # Время 5 часов назад
+                twenty_four_hours_ago = datetime.utcnow() - timedelta(hours=5)
+
+                # Новые тикеты (статус 'New')
+                new_tickets_query = select(func.count(Orders.id)).where(
+                    Orders.status == 'new',
+                    Orders.created_at >= twenty_four_hours_ago
+                )
+                new_tickets_result = await session.execute(new_tickets_query)
+                new_tickets_count = new_tickets_result.scalar() or 0
+
+                # Тикеты в работе (статус 'At work')
+                at_work_tickets_query = select(func.count(Orders.id)).where(
+                    Orders.status == 'at work',
+                    Orders.created_at >= twenty_four_hours_ago
+                )
+                at_work_tickets_result = await session.execute(at_work_tickets_query)
+                at_work_tickets_count = at_work_tickets_result.scalar() or 0
+
+
+
+
+                return {
+                    'new_tickets': new_tickets_count,
+                    'at_work_tickets': at_work_tickets_count,
+                    'period': '5 часа'
+                }
+
+        except Exception as e:
+            logger.error(f"Ошибка получения статистики тикетов: {e}")
+            return None
+        finally:
+            await session.close()

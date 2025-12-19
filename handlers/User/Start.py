@@ -1,6 +1,7 @@
 from aiogram import Bot, Router, F
+from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import Message, CallbackQuery, InputMediaPhoto, FSInputFile
 from aiogram.fsm.context import FSMContext
@@ -8,6 +9,12 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
 from database.db import DataBase, redis_client
 from colorama import Fore, Style
+
+from html import escape as html_escape
+from handlers.Chat import topic_cache
+from handlers.User.common_states import StarsOrder
+from handlers.Worker.Start import active_timers
+from handlers.utils.timers import auto_close_ticket_if_silent
 from logger import logger
 from core.dictionary import *
 from handlers.User.keyboard.replykeqyboard import get_start_menu, get_media_start_kb, get_user_stars_kb
@@ -21,8 +28,7 @@ db = DataBase()
 start_router = Router()
 TIMEOUT = 600
 
-class StarsOrder(StatesGroup):
-    stars_order = State()
+
 
 def is_restricted_time() -> bool:
     now = datetime.now().time()
@@ -281,7 +287,6 @@ async def callback_service(call: CallbackQuery, state: FSMContext):
                     txt = "Вы уже отправили 3 обращения в техническую поддержку за текущие сутки. Новое обращение будет доступно завтра."
                 await call.message.answer(txt)
                 return
-
         add_order = await db.add_orders(service_id, user_id)
         if add_order == 'Active-Ticket':
             await call.message.answer("You already have an active ticket" if lang == "en" else "У вас уже есть активный тикет")
@@ -525,3 +530,259 @@ async def star_worker(message: Message, state: FSMContext):
         return
 
     await state.clear()
+
+
+@start_router.message(StateFilter(None), F.chat.type == ChatType.PRIVATE)
+async def handle_user_private_messages(message: Message, bot: Bot):
+    """
+    Обрабатывает сообщения пользователей и пересылает в топик
+    Добавлены: таймер авто-закрытия и дублирование в общий чат
+    """
+    # Игнорируем команды
+    if message.text and message.text.startswith('/'):
+        return
+
+    user_id = message.from_user.id
+    logger.info(f"📨 Сообщение от пользователя {user_id}")
+
+    # 1. Проверяем кэш Redis
+    thread_id = await topic_cache.get_thread_by_client(user_id)
+
+    if thread_id:
+        # Есть в кэше - отправляем в топик
+        await forward_to_topic_with_timer(message, bot, thread_id, user_id)
+        return
+
+    # 2. Ищем в БД
+    chat_info = await db.get_chat_by_client_id(user_id)
+    if not chat_info:
+        # Нет активного чата
+        await handle_no_active_chat(message, bot, user_id)
+        return
+
+    thread_id = chat_info['thread_id']
+    group_id = chat_info['group_id']
+    ticket_id = chat_info.get('order_id')
+
+    # Сохраняем в кэш
+    await topic_cache.set_mapping(thread_id, user_id)
+
+    # Отправляем в топик
+    await forward_to_topic_with_timer_and_group(message, bot, group_id, thread_id, user_id, ticket_id)
+
+
+async def forward_to_topic_with_timer(message: Message, bot: Bot, thread_id: int, user_id: int):
+    """Пересылает сообщение в топик с обработкой таймера"""
+    try:
+        # Получаем полную информацию из БД
+        chat_info = await db.get_chat_by_thread_id(thread_id)
+        if not chat_info:
+            # Данные устарели
+            await topic_cache.remove_by_client(user_id)
+            await message.answer("❌ Чат не найден. Начните новый диалог.")
+            return
+
+        group_id = chat_info['group_id']
+        ticket_id = chat_info.get('order_id')
+
+        # 1. Обработка таймера авто-закрытия
+        await handle_auto_close_timer(ticket_id, user_id, bot)
+
+        # 2. Отправляем в топик
+        await bot.copy_message(
+            chat_id=group_id,
+            from_chat_id=message.chat.id,
+            message_id=message.message_id,
+            message_thread_id=thread_id
+        )
+        logger.info(f"✅ Сообщение от {user_id} -> топик {thread_id}")
+
+        # 3. Отправляем копию в общий чат (если настроен)
+        await send_to_backup_chat(message, bot, user_id, ticket_id)
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки в топик: {e}")
+        await handle_send_error(message, user_id, e)
+
+
+async def forward_to_topic_with_timer_and_group(message: Message, bot: Bot, group_id: int, thread_id: int, user_id: int,
+                                                ticket_id: int = None):
+    """Пересылает сообщение в топик (с известным group_id) с таймером"""
+    try:
+        # 1. Обработка таймера авто-закрытия
+        await handle_auto_close_timer(ticket_id, user_id, bot)
+
+        # 2. Отправляем в топик
+        await bot.copy_message(
+            chat_id=group_id,
+            from_chat_id=message.chat.id,
+            message_id=message.message_id,
+            message_thread_id=thread_id
+        )
+        logger.info(f"✅ Сообщение от {user_id} -> топик {thread_id}")
+
+        # 3. Отправляем копию в общий чат (если настроен)
+        await send_to_backup_chat(message, bot, user_id, ticket_id)
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки: {e}")
+        await handle_send_error(message, user_id, e)
+
+
+async def handle_auto_close_timer(ticket_id: int, user_id: int, bot: Bot):
+    """Обрабатывает таймер авто-закрытия тикета"""
+    if not ticket_id:
+        return
+
+    # Отменяем существующий таймер для этого тикета
+    if ticket_id in active_timers:
+        active_timers[ticket_id].cancel()
+        del active_timers[ticket_id]
+        logger.info(f"[TIMER] Отменён таймер авто-закрытия тикета №{ticket_id} — клиент начал общение.")
+
+    # Запускаем новый таймер
+    task = asyncio.create_task(auto_close_ticket_if_silent(ticket_id, user_id, bot))
+    active_timers[ticket_id] = task
+    logger.info(f"[TIMER] Запущен таймер авто-закрытия тикета №{ticket_id}")
+
+
+async def send_to_backup_chat(message: Message, bot: Bot, user_id: int, ticket_id: int = None):
+    """
+    Упрощенная версия: текст - как сообщение, медиа - просто копируем
+    """
+    try:
+        BACKUP_CHAT_ID = os.getenv('GP_MG')
+        BACKUP_THREAD_ID = os.getenv('CHAT_ID_MESSAGE')
+
+        if not BACKUP_CHAT_ID:
+            return
+
+        user = message.from_user
+
+        # Базовый информационный текст
+        info_text = f"📨 От: {user.full_name} (@{user.username})" if user.username else f"📨 От: {user.full_name}"
+        info_text += f"\n🆔 ID: {user_id}"
+        if ticket_id:
+            info_text += f"\n🎫 Тикет: #{ticket_id}"
+
+        if message.text:
+            # Текстовое сообщение - отправляем одним сообщением
+            full_text = f"{info_text}\n\n{message.text}"
+
+            send_kwargs = {
+                'chat_id': int(BACKUP_CHAT_ID),
+                'text': full_text
+            }
+
+            if BACKUP_THREAD_ID:
+                send_kwargs['message_thread_id'] = int(BACKUP_THREAD_ID)
+
+            await bot.send_message(**send_kwargs)
+
+        else:
+            # Медиа - копируем БЕЗ подписи
+            copy_kwargs = {
+                'chat_id': int(BACKUP_CHAT_ID),
+                'from_chat_id': message.chat.id,
+                'message_id': message.message_id
+            }
+
+            if BACKUP_THREAD_ID:
+                copy_kwargs['message_thread_id'] = int(BACKUP_THREAD_ID)
+
+            await bot.copy_message(**copy_kwargs)
+
+            # Отправляем информационный текст отдельно
+            send_kwargs = {
+                'chat_id': int(BACKUP_CHAT_ID),
+                'text': info_text
+            }
+
+            if BACKUP_THREAD_ID:
+                send_kwargs['message_thread_id'] = int(BACKUP_THREAD_ID)
+
+            await bot.send_message(**send_kwargs)
+
+    except Exception as e:
+        logger.error(f"Ошибка при отправке в бэкап-чат: {e}")
+
+def escape_markdown(text: str) -> str:
+        """Экранирует специальные символы Markdown V2"""
+        if not text:
+            return ""
+
+        # Список символов, которые нужно экранировать в MarkdownV2
+        escape_chars = r'_*[]()~`>#+-=|{}.!'
+
+        # Экранируем каждый символ
+        for char in escape_chars:
+            text = text.replace(char, f'\\{char}')
+
+        return text
+
+def escape_html(text: str) -> str:
+        """Экранирует HTML-символы"""
+        if not text:
+            return ""
+        return html_escape(text)
+
+
+
+async def update_ticket_message_in_group(bot: Bot, ticket_id: int, order):
+    """Обновляет сообщение о тикете в группе"""
+    try:
+        msg_info = await db.get_all_message(ticket_id)
+        if msg_info and hasattr(msg_info, 'support_message_id'):
+            message_text = (
+                f"⏰ *Авто-закрытие тикета*\n\n"
+                f"📩 Тикет №{ticket_id}\n"
+                f"👤 Клиент: @{order.client_name}\n"
+                f"🆔 ID: {order.client_id}\n"
+                f"🛠 Услуга: {order.service_name}\n"
+                f"👨‍💻 Саппорт: @{order.support_name}\n"
+                f"⏳ Создан: {order.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+                f"⏳ Закрыт: {order.completed_at.strftime('%d.%m.%Y %H:%M') if order.completed_at else 'автоматически'}\n"
+                f"📝 Причина: неактивность клиента"
+            )
+
+            await bot.edit_message_text(
+                chat_id=GROUP_CHAT_ID,
+                message_id=int(msg_info.support_message_id),
+                text=message_text,
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        logger.error(f"Ошибка обновления сообщения тикета: {e}")
+
+
+async def handle_send_error(message: Message, user_id: int, error: Exception):
+    """Обработка ошибок отправки"""
+    error_msg = str(error).lower()
+
+    if "blocked" in error_msg or "forbidden" in error_msg:
+        await message.answer("❌ Не удалось отправить сообщение. Возможно, у бота недостаточно прав.")
+    elif "message_thread_id" in error_msg:
+        await message.answer("⚠️ Ошибка связи с менеджером. Попробуйте позже.")
+    else:
+        await message.answer("❌ Ошибка отправки. Попробуйте позже.")
+
+    # Очищаем кэш при ошибке
+    await topic_cache.remove_by_client(user_id)
+
+
+async def handle_no_active_chat(message: Message, bot: Bot, user_id: int):
+    """Обработка, когда у пользователя нет активного чата"""
+    lang = await _get_lang(user_id)
+
+    active_ticket = await db.get_active_ticket_for_user(user_id)
+
+    if active_ticket:
+        txt = ("⚠️ У вас есть активный тикет, но связь потеряна.\n"
+               "Напишите /start для восстановления." if lang != "en" else
+               "⚠️ You have an active ticket but the connection is lost.\n"
+               "Type /start to restore.")
+    else:
+        txt = ("👋 Для начала работы нажмите /start" if lang != "en" else
+               "👋 Press /start to begin")
+
+    await message.answer(txt)

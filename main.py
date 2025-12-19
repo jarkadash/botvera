@@ -15,6 +15,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.fsm.storage.redis import RedisStorage
 from config import GROUP_CHAT_ID
+from handlers.Groups.create_topic_in_group import group_manager
+
 from logger import logger
 from database.db import DataBase
 from handlers.User.Start import start_router
@@ -23,6 +25,7 @@ from handlers.Admin.Start import admin_router
 from handlers.Worker.Start import worker_router
 from handlers.Chat import chat_router
 from handlers.Media.Start import media_router
+from handlers.Groups.Start import group_router
 from commands import set_commands
 
 db = DataBase()
@@ -38,7 +41,8 @@ token = getenv('TOKEN')
 storage = RedisStorage(redis)
 bot = Bot(token=token, default=DefaultBotProperties(parse_mode='HTML'))
 dp = Dispatcher(storage=storage)
-
+GB_GROUP = getenv('GP')
+GB_THREAD_ID = getenv('CHAT_ID_TIKETS_SUPPORT')
 async def start_up(bot: Bot):
     await bot.send_message(chat_id=434791099, text='Бот запущен')
 
@@ -47,7 +51,7 @@ async def stop_up(bot: Bot):
 
 dp.startup.register(start_up)
 dp.shutdown.register(stop_up)
-dp.include_routers(start_router, admin_router, worker_router, media_router, chat_router)
+dp.include_routers(start_router, admin_router, worker_router, media_router, group_router, chat_router)
 
 async def start():
     try:
@@ -55,6 +59,8 @@ async def start():
         await bot.delete_webhook(drop_pending_updates=True)
         await db.create_db()
         await set_commands(bot)
+        asyncio.create_task(check_tickets_periodically(bot, 25))
+        group_manager.set_bot(bot)
         await dp.start_polling(bot, skip_updates=True)
     finally:
         await bot.session.close()
@@ -161,6 +167,45 @@ async def start_check(bot: Bot):
             chat_id=434791099,
             text=f"❌ Критическая ошибка в автоматическом закрытии заказов: {error_msg}"
         )
+
+
+# Простой планировщик в main.py
+async def check_tickets_periodically(bot: Bot, interval_minutes: int = 25):
+    """Периодически проверяет статистику тикетов"""
+    logger.info(f"Запущена периодическая проверка тикетов каждые {interval_minutes} минут")
+
+    while True:
+        try:
+            # Ждем перед первой проверкой
+            await asyncio.sleep(interval_minutes * 60)
+
+            # Получаем статистику
+            statistics = await db.get_tickets_statistics()
+
+            if statistics:
+                message = (
+                    f"📊 <b>Авто-отчет по тикетам</b>\n\n"
+                    f"🆕 Новые: {statistics['new_tickets']}\n"
+                    f"⚙️ В работе: {statistics['at_work_tickets']}\n"
+                )
+
+                # Отправляем админам
+
+                try:
+                    await bot.send_message(
+                    chat_id=int(GB_GROUP),
+                        message_thread_id=GB_THREAD_ID,
+                        text=message, parse_mode="HTML")
+                except Exception as e:
+                    logger.warning(f"Не удалось отправить статистику: {e}")
+
+                logger.info(f"Статистика отправлена: {statistics}")
+
+        except Exception as e:
+            logger.error(f"Ошибка в периодической проверке: {e}")
+        finally:
+            # Снова ждем
+            await asyncio.sleep(interval_minutes * 60)
 
 async def start_scheduler(bot: Bot):
     scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))

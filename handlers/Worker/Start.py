@@ -1,3 +1,5 @@
+import time
+
 from aiogram import Bot, Router, F
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.filters import Command
@@ -11,6 +13,8 @@ import html
 from database.db import DataBase, redis_client
 import asyncio
 from colorama import Fore, Style
+
+from handlers.Worker.common_states import FormOrderShema
 from logger import logger
 from core.dictionary import *
 from handlers.User.keyboard.replykeqyboard import *
@@ -44,6 +48,16 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
     order_id = int(call.data.split(":")[1])
     try:
         accept = await db.accept_orders(order_id, int(call.from_user.id))
+        if isinstance(accept, dict):
+            # Результат - словарь с ключами updated_order, group_id, thread_id
+            updated_order = accept.get("updated_order")
+            group_id = accept.get("group_id")
+            thread_id = accept.get("thread_id")
+
+            if not updated_order:
+                await call.answer("Ошибка при принятии тикета", show_alert=True)
+                return
+
         if accept is False or accept == 'Пользователь не имеет роли!':
             await call.answer("У вас нет доступа к этому Тикету", show_alert=True)
         elif accept == 'Active-Ticket':
@@ -54,21 +68,21 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
             message_accept = (
                 f"✅ Тикет принят!\n\n\n"
                 f"📩 <b>Тикет</b> №{order_id}\n"
-                f"👤 <b>Пользователь:</b> @{html.escape(accept.client_name)}\n"
-                f"🆔 <b>ID:</b> {accept.client_id}\n"
-                f"<a href=\"https://t.me/{html.escape(accept.client_name)}\">🔗 1.Телеграм</a>\n"
-                f"<a href=\"tg://user?id={accept.client_id}\">🔗 2.Телеграм</a>\n"
-                f"🛠 <b>Услуга:</b> {html.escape(accept.service_name)}\n"
-                f"🆔 <b>Support_id:</b> {accept.support_id}\n"
-                f"👨‍💻 <b>Support_name:</b> @{html.escape(accept.support_name)}\n"
-                f"ℹ️ <b>Статус:</b> {html.escape(accept.status)}\n"
-                f"⏳ <b>Создана:</b> {accept.created_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
-                f"⏳ <b>Принята:</b> {accept.accept_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
+                f"👤 <b>Пользователь:</b> @{html.escape(updated_order.client_name)}\n"
+                f"🆔 <b>ID:</b> {updated_order.client_id}\n"
+                f"<a href=\"https://t.me/{html.escape(updated_order.client_name)}\">🔗 1.Телеграм</a>\n"
+                f"<a href=\"tg://user?id={updated_order.client_id}\">🔗 2.Телеграм</a>\n"
+                f"🛠 <b>Услуга:</b> {html.escape(updated_order.service_name)}\n"
+                f"🆔 <b>Support_id:</b> {updated_order.support_id}\n"
+                f"👨‍💻 <b>Support_name:</b> @{html.escape(updated_order.support_name)}\n"
+                f"ℹ️ <b>Статус:</b> {html.escape(updated_order.status)}\n"
+                f"⏳ <b>Создана:</b> {updated_order.created_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
+                f"⏳ <b>Принята:</b> {updated_order.accept_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
                 f"<a href=\"https://t.me/GBPSupport_bot\">Перейти в бота</a>"
             )
             try:
                 await bot.send_message(
-                    chat_id=int(accept.client_id),
+                    chat_id=int(updated_order.client_id),
                     text=(
                         f"🎉 Ваш тикет №{order_id} успешно принят!\n\n"
                         f"Теперь вы можете общаться с менеджером в этом чате. "
@@ -76,11 +90,11 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                         f"Команда /stop_chat — завершить диалог"
                     )
                 )
-                task = asyncio.create_task(auto_close_ticket_if_silent(order_id, accept.client_id, bot))
+                task = asyncio.create_task(auto_close_ticket_if_silent(order_id, updated_order.client_id, bot))
                 active_timers[order_id] = task
-                if accept.service_name == "Техническая помощь / Technical Support":
+                if updated_order.service_name == "Техническая помощь / Technical Support":
                     await bot.send_message(
-                        chat_id=int(accept.client_id),
+                        chat_id=int(updated_order.client_id),
                         text=(
                             "   *Приветствую!*\n"
                             "*Предоставь информацию по форме:* \n\n"
@@ -97,9 +111,9 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                             "   *При наличии ошибок — предоставь скриншот ошибки.*"
                         ), parse_mode="markdown"
                     )
-                elif accept.service_name == "NFA / HWID RESET":
+                elif updated_order.service_name == "NFA / HWID RESET":
                     await bot.send_message(
-                        chat_id=int(accept.client_id),
+                        chat_id=int(updated_order.client_id),
                         text=(
                             f"Приветствую!\n"
                             f"Для сброса HWID предоставь информацию по форме:\n\n"
@@ -109,47 +123,61 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                         ), parse_mode="HTML", reply_markup=None
                     )
 
-                await redis_client.set(f"ticket:{accept.support_id}", order_id)
 
                 await bot.send_message(
-                    chat_id=call.from_user.id,
-                    text=f"Тикет №{order_id} принят!\nЧат с пользователем открыт!",
-                    reply_markup=ReplyKeyboardMarkup(
-                        keyboard=[[KeyboardButton(text="📱 Поделиться контактом", request_contact=True)]],
-                        resize_keyboard=True,
-                        one_time_keyboard=False
-                    )
+                    chat_id=int(group_id),
+                    message_thread_id=int(thread_id),  # ⚠️ ВАЖНО: message_thread_id, а не thread_id!
+                    text=f"Тикет №{order_id} принят!\nЧат с пользователем открыт!\n\n"
+                         f"⚠️Напоминаем⚠️\n"
+                         f"Обязательно уточните у пользователя, (Название игры, название чита, сформулируйте причину обращения пользователя)\n"
+                         f"В конце общения с пользователем, после закрытия тикета, "
+                         f"Вам, необходимо заполнить форму обращения, для текущего тикета, "
+                         f"так же нужно сразу заполнить форму, не переходя в другой тикет(тему) и не откладывать на потом!!\n"
+                         f"Сразу закрыли и заполнили!!\n\n\n"
+                         f"⚠️Самое главное, пока не заполните форму, не закрывайте другой тикет, закрыли заполнили!⚠️",
+
                 )
             except TelegramForbiddenError as e:
                 logger.error(Fore.RED + f"Ошибка при отправке сообщения клиенту: {e}" + Style.RESET_ALL)
                 await bot.send_message(
                     chat_id=call.from_user.id,
                     text=(f"Ошибка принятия тикета! {order_id}\n"
-                          f"Пользователь @{accept.client_name} заблокировал бота\n"
+                          f"Пользователь @{updated_order.client_name} заблокировал бота\n"
                           )
                 )
                 message_accept = (
                     f"✅ Тикет закрыт!\n\n\n"
                     f"📩 <b>Тикет</b> №{order_id}\n"
-                    f"👤 <b>Пользователь:</b> @{html.escape(accept.client_name)}\n"
-                    f"🆔 <b>ID:</b> {accept.client_id}\n"
-                    f"<a href=\"https://t.me/{html.escape(accept.client_name)}\">🔗 1.Телеграм</a>\n"
-                    f"<a href=\"tg://user?id={accept.client_id}\">🔗 2.Телеграм</a>\n"
-                    f"🛠 <b>Услуга:</b> {html.escape(accept.service_name)}\n"
-                    f"🆔 <b>Support_id:</b> {accept.support_id}\n"
-                    f"👨‍💻 <b>Support_name:</b> @{html.escape(accept.support_name)}\n"
-                    f"ℹ️ <b>Статус:</b> {html.escape(accept.status)}\n"
-                    f"⏳ <b>Создана:</b> {accept.created_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
+                    f"👤 <b>Пользователь:</b> @{html.escape(updated_order.client_name)}\n"
+                    f"🆔 <b>ID:</b> {updated_order.client_id}\n"
+                    f"<a href=\"https://t.me/{html.escape(updated_order.client_name)}\">🔗 1.Телеграм</a>\n"
+                    f"<a href=\"tg://user?id={updated_order.client_id}\">🔗 2.Телеграм</a>\n"
+                    f"🛠 <b>Услуга:</b> {html.escape(updated_order.service_name)}\n"
+                    f"🆔 <b>Support_id:</b> {updated_order.support_id}\n"
+                    f"👨‍💻 <b>Support_name:</b> @{html.escape(updated_order.support_name)}\n"
+                    f"ℹ️ <b>Статус:</b> {html.escape(updated_order.status)}\n"
+                    f"⏳ <b>Создана:</b> {updated_order.created_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
                     f"<b>Причина:</b> Пользователь заблокировал бота\n"
                 )
-                await db.get_auto_close_order(int(order_id), reason="Авто-закрытие (Заблокировал бота)")
-                await redis_client.delete(f"ticket:{accept.client_id}")
-                await redis_client.delete(f'chat:{accept.client_id}')
-                await redis_client.delete(f"role:{accept.client_id}")
-                await redis_client.delete(f"chat:{call.from_user.id}")
-                await redis_client.delete(f"ticket:{call.from_user.id}")
-                await redis_client.delete(f"role:{call.from_user.id}")
-                await redis_client.delete(f"messages:{order_id}")
+                result = await db.get_auto_close_order(int(order_id), reason="Авто-закрытие (Заблокировал бота)")
+
+                try:
+                    await bot.delete_forum_topic(
+                        chat_id=int(result['group_id']),
+                        message_thread_id=int(result['thread_id']),
+                    )
+                    logger.info(f"Топик {result['thread_id']} удален в Telegram")
+                except Exception as e:
+                    logger.warning(f"Не удалось удалить топик: {e}")
+                # Пробуем закрыть топик вместо удаления
+                try:
+                    await bot.close_forum_topic(
+                        chat_id=int(result['group_id']),
+                        message_thread_id=int(result['thread_id'])
+                    )
+                    logger.info(f"Топик {result['thread_id']} закрыт в Telegram")
+                except Exception as e2:
+                    logger.warning(f"Не удалось закрыть топик: {e2}")
                 message_info = await db.get_all_message(int(order_id))
                 if message_info:
                     logger.info(Fore.BLUE + f"Получена информация о Тикете №{order_id}." + Style.RESET_ALL)
@@ -517,3 +545,114 @@ async def auto_close_ticket_if_silent(order_id: int, client_id: int, bot: Bot):
 
     except Exception as e:
         logger.error(f"[TIMER ERROR] Ошибка при авто-закрытии тикета №{order_id}: {e}")
+
+
+
+@worker_router.message(FormOrderShema.name_game)
+async def add_name_game_for_form(message: Message, state: FSMContext):
+    logger.info(f"Пользователь ввел название игры: {message.text}")
+    data = await state.get_data()
+    saved_thread_id = data.get('thread_id')
+
+    if message.message_thread_id != saved_thread_id:
+        await message.answer("⚠️ Пожалуйста, продолжайте заполнение формы в исходном топике.")
+        return
+
+    game_name = message.text
+
+    await state.update_data(name_game=game_name)
+    await message.answer("Введите название чита:")
+    await state.set_state(FormOrderShema.name_cheat)
+
+@worker_router.message(FormOrderShema.name_cheat)
+async def add_name_cheat_for_form(message: Message, state: FSMContext):
+    logger.info(f"Пользователь ввел название чита:{message.text}")
+    data = await state.get_data()
+    saved_thread_id = data.get('thread_id')
+
+    if message.message_thread_id != saved_thread_id:
+        await message.answer("⚠️ Пожалуйста, продолжайте заполнение формы в исходном топике.")
+        return
+    cheat_name = message.text
+
+    await state.update_data(name_cheat=cheat_name)
+    await message.answer("Ведите описание обращение:")
+    await state.set_state(FormOrderShema.problem_description)
+
+@worker_router.message(FormOrderShema.problem_description)
+async def add_problem_description_for_form(message: Message, state: FSMContext):
+    logger.info(f"Пользователь ввел причину обращение: {message.text}")
+    data = await state.get_data()
+    saved_thread_id = data.get('thread_id')
+
+    if message.message_thread_id != saved_thread_id:
+        await message.answer("⚠️ Пожалуйста, продолжайте заполнение формы в исходном топике.")
+        return
+
+    problem_description = message.text
+    await state.update_data(problem_description=problem_description)
+    await message.answer("Введите характеристики пк пользователя который обратился:")
+    await state.set_state(FormOrderShema.specifications)
+
+
+@worker_router.message(FormOrderShema.specifications)
+async def add_specifications_for_form(message: Message, state: FSMContext, bot: Bot):
+    logger.info(f"Пользователь ввел характеристики пк: {message.text}")
+    data = await state.get_data()
+    saved_thread_id = data.get('thread_id')
+
+    if message.message_thread_id != saved_thread_id:
+        await message.answer("⚠️ Пожалуйста, продолжайте заполнение формы в исходном топике.")
+        return
+
+    specifications = message.text
+    await state.update_data(specifications=specifications)
+    get_data = await state.get_data()
+    order_id = get_data["order_id"]
+    name_game = get_data["name_game"]
+    name_cheat = get_data["name_cheat"]
+    problem_description = get_data["problem_description"]
+
+    # ИСПРАВЛЕНИЕ: Получаем thread_id правильно
+    # Вариант 1: Из сообщения (если сообщение в треде/теме)
+    thread_id = message.message_thread_id
+
+    # Вариант 2: Из данных состояния (если сохраняли ранее)
+    if not thread_id:
+        thread_id = get_data.get("thread_id")
+
+    # Вариант 3: Если все равно не нашли, логируем предупреждение
+    if not thread_id:
+        logger.warning(f"Не удалось найти thread_id для удаления топика. order_id: {order_id}")
+        await message.answer("Форма успешно заполнена!")
+        await state.clear()
+        return
+
+    add_form_in_base = await db.add_form_in_base(order_id, name_game, name_cheat, problem_description, specifications)
+
+    if add_form_in_base is not False:
+        await message.answer("Форма успешно заполнена, эта тема удалится автоматически!")
+        await state.clear()
+        # Небольшая задержка перед удалением
+        await asyncio.sleep(5)  # Используем asyncio.sleep вместо time.sleep
+
+        try:
+            # Сначала пробуем удалить топик
+            await bot.delete_forum_topic(
+                chat_id=message.chat.id,
+                message_thread_id=thread_id
+            )
+            logger.info(f"Топик {thread_id} удален в Telegram")
+        except Exception as e:
+            logger.warning(f"Не удалось удалить топик: {e}")
+
+            # Если не удалось удалить, пробуем закрыть
+            try:
+                await bot.close_forum_topic(
+                    chat_id=message.chat.id,
+                    message_thread_id=thread_id
+                )
+                logger.info(f"Топик {thread_id} закрыт в Telegram")
+            except Exception as e2:
+                logger.warning(f"Не удалось закрыть топик: {e2}")
+

@@ -106,7 +106,7 @@ async def admin(message: Message):
     logger.info(Fore.BLUE + f'Пользователь {message.from_user.username} id: {message.from_user.id} '
                             f'ввел команду /admin' + Style.RESET_ALL)
     try:
-        if message.from_user.id == 434791099 or message.from_user.id == 835867765:
+        if message.from_user.id == 557241848 or message.from_user.id == 835867765:
             await message.answer(text='Выберите действие: ', reply_markup=admin_panel)
         elif await db.get_admin_by_id(message.from_user.id) is True:
             await message.answer(text='Выберите действие:', reply_markup=admin_panel)

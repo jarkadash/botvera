@@ -88,3 +88,33 @@ class PaymentRates(Base):
     get_key: Mapped[int] = mapped_column(default=100)
     reselling: Mapped[int] = mapped_column(default=30)
     bonus_per_50: Mapped[int] = mapped_column(default=1000)
+
+
+class GroupsSupportModel(Base):
+    __tablename__ = 'groups_support'
+    id: Mapped[intpk]
+    support_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('users.id'))
+    group_id: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+
+
+class TicketsIdSupportGroupsModel(Base):
+    __tablename__ = 'tickets_support_groups'
+    id: Mapped[intpk]
+    order_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('orders.id'))
+    group_id: Mapped[int] = mapped_column( ForeignKey('groups_support.id', ondelete='CASCADE'))
+    support_id: Mapped[int] = mapped_column( ForeignKey('users.id'))
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    thread_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+
+class FormTicketsUsersModel(Base):
+    __tablename__ = 'form_tickets_users'
+    id: Mapped[intpk]
+    order_id: Mapped[int] = mapped_column(ForeignKey('orders.id'))
+    name_cheat: Mapped[str] = mapped_column(String(100), nullable=False)
+    name_game: Mapped[str] = mapped_column(String(100), nullable=False)
+    specifications: Mapped[str] = mapped_column(String(500), nullable=False)
+    problem_description: Mapped[str] = mapped_column(String(1000), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+
