@@ -876,48 +876,133 @@ class DataBase:
                 await session.close()
 
     async def get_auto_close_order(self, order_id, reason: str = "Авто-закрытие (Клиент не ответил)"):
+        """
+        Автоматическое закрытие тикета
+        """
+        import traceback
+        import asyncio
+
+        logger.info(f"🔧 [DEBUG] Вызов get_auto_close_order для тикета #{order_id}")
+
         async with self.Session() as session:
             try:
+                logger.debug(f"📝 [TICKET #{order_id}] 1. Получение тикета из БД...")
+
+                # 1. Получаем тикет с явной загрузкой всех необходимых атрибутов
                 order = await session.get(Orders, order_id)
                 if not order:
-                    logger.warning(Fore.RED + f'Тикет {order_id} не найден!' + Style.RESET_ALL)
-                    return False
+                    logger.warning(f'❌ Тикет {order_id} не найден!')
+                    return {
+                        "success": False,
+                        "error": "Тикет не найден",
+                        "order_id": order_id
+                    }
+
+                # 2. СОХРАНЯЕМ ВАЖНЫЕ ДАННЫЕ ДО КОММИТА!
+                client_id = order.client_id
+                service_name = order.service_name
+                current_status = order.status
+
+                logger.debug(f"📝 [TICKET #{order_id}] 2. Проверка статуса... (текущий: {current_status})")
+
+                # 3. Проверяем, можно ли закрыть тикет
+                if current_status in ['closed', 'cancelled', 'canceled']:
+                    logger.info(f'ℹ️ Тикет {order_id} уже закрыт (статус: {current_status})')
+                    return {
+                        "success": False,
+                        "error": f"Тикет уже закрыт (статус: {current_status})",
+                        "order_id": order_id,
+                        "status": current_status
+                    }
+
+                if current_status not in ['at work', 'paused', 'new']:
+                    logger.warning(f'⚠️ Неожиданный статус тикета {order_id}: {current_status}')
+                    return {
+                        "success": False,
+                        "error": f"Неожиданный статус: {current_status}",
+                        "order_id": order_id,
+                        "status": current_status
+                    }
+
+                logger.debug(f"📝 [TICKET #{order_id}] 3. Обновление статуса...")
+
+                # 4. Обновляем статус тикета
                 order.status = 'closed'
-                if not order.accept_at:
-                    order.accept_at = datetime.now()
                 order.completed_at = datetime.now()
                 order.description = reason
 
-                result = await session.execute(
-                    select(TicketsIdSupportGroupsModel)
-                    .join(
-                        GroupsSupportModel,
-                        GroupsSupportModel.id == TicketsIdSupportGroupsModel.group_id
+                # 5. Получаем информацию о топике Telegram
+                thread_id = None
+                support_group_id = None
+                topic_found = False
+
+                logger.debug(f"📝 [TICKET #{order_id}] 4. Поиск топика в группах поддержки...")
+
+                try:
+                    result = await session.execute(
+                        select(TicketsIdSupportGroupsModel, GroupsSupportModel)
+                        .join(
+                            GroupsSupportModel,
+                            GroupsSupportModel.id == TicketsIdSupportGroupsModel.group_id
+                        )
+                        .where(TicketsIdSupportGroupsModel.order_id == order_id)
                     )
-                    .where(TicketsIdSupportGroupsModel.order_id == order_id)
-                )
-                row = result.first()
-                if row:
-                    ticket, group = row
-                    thread_id = ticket.thread_id
-                    support_group_id = group.id  # ID из GroupsSupportModel
-                    group_name = group.name  # Дополнительные поля группы
 
-                    print(f"Thread: {thread_id}, Group ID: {support_group_id}, Name: {group_name}")
+                    row = result.first()
+                    if row:
+                        ticket, group = row
+                        thread_id = ticket.thread_id
+                        support_group_id = group.group_id
+                        topic_found = True
 
-                    await session.delete(ticket)
-                    await session.commit()
+                        logger.info(f"📌 Найден топик: thread_id={thread_id}, group_id={support_group_id}")
 
+                        # Удаляем запись о топике
+                        await session.delete(ticket)
+                        logger.debug(f"🗑️ Запись топика удалена из БД")
+                    else:
+                        logger.info(f"ℹ️ Топик не найден для тикета {order_id}")
 
+                except Exception as topic_error:
+                    logger.error(f"⚠️ Ошибка при поиске топика: {topic_error}")
+                    # Продолжаем закрытие тикета даже без удаления топика
+
+                logger.debug(f"📝 [TICKET #{order_id}] 5. Коммит изменений в БД...")
+
+                # 6. Коммитим все изменения
                 await session.commit()
-                return {"thread_id":thread_id, "group_id":support_group_id, "order_id":order_id}
+
+                # 7. ИСПОЛЬЗУЕМ СОХРАНЕННЫЕ ДАННЫЕ, А НЕ ОБЪЕКТ ПОСЛЕ КОММИТА
+                logger.info(f"✅ [SUCCESS] Тикет {order_id} успешно авто-закрыт")
+                logger.info(f"   📊 Статистика: клиент={client_id}, сервис={service_name}")
+
+                return {
+                    "success": True,
+                    "order_id": order_id,
+                    "thread_id": thread_id,
+                    "group_id": support_group_id,
+                    "client_id": client_id,  # Используем сохраненное значение
+                    "topic_found": topic_found,
+                    "status": "closed",
+                    "service_name": service_name  # Добавляем для информации
+                }
 
             except Exception as e:
-                logger.error(Fore.RED + f'Ошибка: {e}' + Style.RESET_ALL)
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+                logger.error(f'❌ [ERROR] Ошибка при авто-закрытии тикета {order_id}: {e}', exc_info=True)
+                logger.error(f'   🐛 Детали: тип ошибки: {type(e).__name__}')
+
+                try:
+                    await session.rollback()
+                    logger.debug("🔄 Откат транзакции выполнен")
+                except:
+                    pass
+
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "order_id": order_id,
+                    "type": type(e).__name__
+                }
 
     async def check_role(self, user_id):
         async with self.Session() as session:

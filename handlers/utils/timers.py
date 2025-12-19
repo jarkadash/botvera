@@ -9,6 +9,7 @@ from logger import logger
 active_timers = {}
 db = DataBase()
 
+
 async def auto_close_ticket_if_silent(ticket_id: int, user_id: int, bot: Bot, timeout_minutes: int = 3):
     """
     Автоматически закрывает тикет, если нет активности от клиента
@@ -23,41 +24,45 @@ async def auto_close_ticket_if_silent(ticket_id: int, user_id: int, bot: Bot, ti
         logger.info(f"[TIMER] Авто-закрытие тикета №{ticket_id} после {timeout_minutes} минут неактивности")
 
         # Закрываем тикет
-        result = await db.get_auto_close_order(ticket_id, reason=f"Авто-закрытие (нет активности {timeout_minutes} мин)")
+        result = await db.get_auto_close_order(
+            ticket_id,
+            reason=f"Авто-закрытие (нет активности {timeout_minutes} мин)"
+        )
 
-        if result:
-            # Получаем информацию о тикете
+        if result and result.get("success"):
+            logger.info(f"[TIMER] Тикет №{ticket_id} успешно авто-закрыт")
+
+            # Получаем информацию о тикете (загружаем заново после закрытия)
             order = await db.get_orders_by_id(ticket_id)
 
-            if order:
-                # Уведомляем саппорта
-                try:
-                    await bot.send_message(
-                        chat_id=int(order.support_id),
-                        text=f"⏰ Тикет №{ticket_id} автоматически закрыт из-за неактивности клиента"
-                    )
+            if order and result.get("group_id") and result.get("thread_id"):
+                # Уведомляем саппорта если есть support_id
+                if hasattr(order, 'support_id') and order.support_id:
                     try:
-                        await bot.delete_forum_topic(
-                            chat_id=int(result['group_id']),
-                            message_thread_id=int(result['thread_id']),
+                        await bot.send_message(
+                            chat_id=int(order.support_id),
+                            text=f"⏰ Тикет №{ticket_id} автоматически закрыт из-за неактивности клиента"
                         )
-                        logger.info(f"Топик {result['thread_id']} удален в Telegram")
                     except Exception as e:
-                        logger.warning(f"Не удалось удалить топик: {e}")
-                    # Пробуем закрыть топик вместо удаления
-                    try:
-                        await bot.close_forum_topic(
-                            chat_id=int(result['group_id']),
-                            message_thread_id=int(result['thread_id'])
-                        )
-                        logger.info(f"Топик {result['thread_id']} закрыт в Telegram")
-                    except Exception as e2:
-                        logger.warning(f"Не удалось закрыть топик: {e2}")
-                except:
-                    pass
+                        logger.warning(f"Не удалось уведомить саппорта: {e}")
+
+                # Пробуем закрыть топик
+                try:
+                    await bot.close_forum_topic(
+                        chat_id=int(result['group_id']),
+                        message_thread_id=int(result['thread_id'])
+                    )
+                    logger.info(f"Топик {result['thread_id']} закрыт в Telegram")
+                except Exception as e:
+                    logger.warning(f"Не удалось закрыть топик: {e}")
 
                 # Обновляем сообщение в группе
                 await update_ticket_message_in_group(bot, ticket_id, order)
+
+        elif result and not result.get("success"):
+            logger.error(f"[TIMER] Ошибка авто-закрытия тикета №{ticket_id}: {result.get('error')}")
+        else:
+            logger.error(f"[TIMER] Неизвестная ошибка при авто-закрытии тикета №{ticket_id}")
 
         # Удаляем таймер
         if ticket_id in active_timers:
@@ -65,8 +70,14 @@ async def auto_close_ticket_if_silent(ticket_id: int, user_id: int, bot: Bot, ti
 
     except asyncio.CancelledError:
         logger.info(f"[TIMER] Таймер авто-закрытия для тикета №{ticket_id} отменён")
+        # Очищаем таймер при отмене
+        if ticket_id in active_timers:
+            del active_timers[ticket_id]
     except Exception as e:
         logger.error(f"[TIMER] Ошибка авто-закрытия тикета №{ticket_id}: {e}")
+        # Очищаем таймер при ошибке
+        if ticket_id in active_timers:
+            del active_timers[ticket_id]
 
 
 async def update_ticket_message_in_group(bot: Bot, ticket_id: int, order):
@@ -104,11 +115,24 @@ async def handle_auto_close_timer(ticket_id: int, user_id: int, bot: Bot):
 
     # Отменяем существующий таймер для этого тикета
     if ticket_id in active_timers:
-        active_timers[ticket_id].cancel()
+        try:
+            task = active_timers[ticket_id]
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        except Exception as e:
+            logger.error(f"Ошибка при отмене таймера {ticket_id}: {e}")
+
         del active_timers[ticket_id]
         logger.info(f"[TIMER] Отменён таймер авто-закрытия тикета №{ticket_id} — клиент начал общение.")
 
     # Запускаем новый таймер
-    task = asyncio.create_task(auto_close_ticket_if_silent(ticket_id, user_id, bot))
+    task = asyncio.create_task(
+        auto_close_ticket_if_silent(ticket_id, user_id, bot),
+        name=f"auto_close_{ticket_id}"
+    )
     active_timers[ticket_id] = task
     logger.info(f"[TIMER] Запущен таймер авто-закрытия тикета №{ticket_id}")
