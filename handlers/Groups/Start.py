@@ -148,7 +148,7 @@ async def start_settings_group(message: Message):
 
 @group_router.callback_query(F.data.startswith("Add_setup_support_chat_"))
 async def add_setup_support_chat(call: CallbackQuery):
-    logger.info(f"Пользователь назначает сапорта {call.data.split("_")[4]}, группу")
+    logger.info(f'Пользователь назначает сапорта {call.data.split("_")[4]}, группу')
     result = await db.get_user(call.from_user.id, call.from_user.username)
     if result != 'admin':
         return await call.answer("Вы не администратор", show_alert=True)
