@@ -207,31 +207,95 @@ class RedisTopicCache:
             logger.error(f"Ошибка Redis get_client_by_thread: {e}")
         return None
 
-    async def get_thread_by_client(self, client_telegram_id: int) -> Optional[int]:
-        """Получить thread_id по Telegram ID клиента"""
+    async def get_thread_by_client(self, client_telegram_id: int):
+        """Получить thread_id по client_id"""
         try:
-            # client_id -> thread_id
-            key = f"{self.prefix}client:{client_telegram_id}"
-            thread_id = await self.redis.get(key)
+            client_key = f"{self.prefix}client:{client_telegram_id}"
+            thread_id = await self.redis.get(client_key)
+
             if thread_id:
-                await self.redis.expire(key, self.ttl_seconds)
-                return int(thread_id)
+                # Получаем дополнительные данные из БД
+                chat_info = await db.get_chat_by_thread_id(int(thread_id))
+                if chat_info:
+                    return {
+                        "thread_id": int(thread_id),
+                        "group_id": chat_info.get('group_id'),
+                        "ticket_id": chat_info.get('order_id'),
+                        "client_id": client_telegram_id
+                    }
+                else:
+                    # Данные устарели, удаляем из кэша
+                    await self.remove_by_client(client_telegram_id)
+                    return None
+            return None
         except Exception as e:
             logger.error(f"Ошибка Redis get_thread_by_client: {e}")
-        return None
+            return None
 
-    async def set_mapping(self, thread_id: int, client_telegram_id: int):
-        """Установить связь thread_id <-> client_id"""
+    async def get_full_mapping(self, client_telegram_id: int = None, thread_id: int = None):
+        """Получить полную информацию о маппинге"""
         try:
-            # thread_id -> client_id
+            if client_telegram_id:
+                # Ищем по client_id
+                client_key = f"{self.prefix}client:{client_telegram_id}"
+                thread_id = await self.redis.get(client_key)
+                if not thread_id:
+                    return None
+
+            if not thread_id:
+                return None
+
+            # Получаем информацию из БД
+            chat_info = await db.get_chat_by_thread_id(int(thread_id))
+            if not chat_info:
+                # Данные устарели, очищаем кэш
+                if client_telegram_id:
+                    await self.remove_by_client(client_telegram_id)
+                await self.remove_by_thread(thread_id)
+                return None
+
+            return {
+                "thread_id": int(thread_id),
+                "group_id": chat_info.get('group_id'),
+                "ticket_id": chat_info.get('order_id'),
+                "client_id": chat_info.get('client_id'),
+                "client_telegram_id": client_telegram_id or chat_info.get('client_id')
+            }
+
+        except Exception as e:
+            logger.error(f"Ошибка Redis get_full_mapping: {e}")
+            return None
+
+    async def set_mapping(self, thread_id: int, client_telegram_id: int, group_id: int = None, ticket_id: int = None):
+        """Установить связь thread_id <-> client_id с дополнительными данными"""
+        try:
+            # Основные связи
             thread_key = f"{self.prefix}thread:{thread_id}"
             await self.redis.setex(thread_key, self.ttl_seconds, str(client_telegram_id))
 
-            # client_id -> thread_id
             client_key = f"{self.prefix}client:{client_telegram_id}"
             await self.redis.setex(client_key, self.ttl_seconds, str(thread_id))
 
-            logger.info(f"Redis кэш: {thread_id} <-> {client_telegram_id}")
+            # Дополнительные данные для thread_id
+            if group_id:
+                group_key = f"{self.prefix}group:{thread_id}"
+                await self.redis.setex(group_key, self.ttl_seconds, str(group_id))
+
+            if ticket_id:
+                ticket_key = f"{self.prefix}ticket:{thread_id}"
+                await self.redis.setex(ticket_key, self.ttl_seconds, str(ticket_id))
+
+            # Или сохранить все в одном хэше
+            mapping_key = f"{self.prefix}mapping:{thread_id}"
+            mapping_data = {
+                "client_id": str(client_telegram_id),
+                "group_id": str(group_id) if group_id else "",
+                "ticket_id": str(ticket_id) if ticket_id else ""
+            }
+            await self.redis.hset(mapping_key, mapping=mapping_data)
+            await self.redis.expire(mapping_key, self.ttl_seconds)
+
+            logger.info(f"Redis кэш: {thread_id} <-> {client_telegram_id} (group: {group_id}, ticket: {ticket_id})")
         except Exception as e:
             logger.error(f"Ошибка Redis set_mapping: {e}")
 

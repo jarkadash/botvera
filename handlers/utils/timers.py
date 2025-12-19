@@ -1,8 +1,12 @@
 import asyncio
 import os
+import traceback
 
 from aiogram import Bot
-from database.db import DataBase
+from aiogram.exceptions import TelegramForbiddenError, TelegramAPIError
+
+from config import GROUP_CHAT_ID
+from database.db import DataBase, redis_client
 from logger import logger
 
 # Словарь активных таймеров
@@ -12,127 +16,304 @@ db = DataBase()
 
 async def auto_close_ticket_if_silent(ticket_id: int, user_id: int, bot: Bot, timeout_minutes: int = 3):
     """
-    Автоматически закрывает тикет, если нет активности от клиента
+    Автоматически закрывает тикет, если клиент не отвечает
+    timeout_minutes: общее время до закрытия (по умолчанию 3 минуты)
     """
-    try:
-        await asyncio.sleep(timeout_minutes * 60)  # Ждем N минут
+    timer_key = f"timer_{ticket_id}"
 
-        # Проверяем, активен ли еще таймер
-        if ticket_id not in active_timers:
+    try:
+        logger.info(f"[TIMER] Запущен таймер авто-закрытия тикета №{ticket_id} ({timeout_minutes} мин)")
+
+        # 1. Ждем 2/3 времени для предупреждения
+        warning_time = int((timeout_minutes * 60) * 0.66)  # 66% от общего времени
+
+        # Используем asyncio.wait_for с таймаутом
+        try:
+            await asyncio.wait_for(asyncio.sleep(warning_time), timeout=warning_time + 10)
+        except asyncio.TimeoutError:
+            logger.warning(f"[TIMER] Таймер предупреждения для тикета №{ticket_id} превысил лимит времени")
+            return
+        except asyncio.CancelledError:
+            logger.info(f"[TIMER] Таймер предупреждения для тикета №{ticket_id} отменен")
+            raise
+
+        # Проверяем, активен ли еще таймер (используем правильный ключ)
+        if active_timers.get(timer_key) != asyncio.current_task():
+            logger.info(f"[TIMER] Таймер для тикета №{ticket_id} был заменен или отменен")
             return
 
-        logger.info(f"[TIMER] Авто-закрытие тикета №{ticket_id} после {timeout_minutes} минут неактивности")
+        # Проверяем статус тикета
+        order_info = await db.get_orders_by_id(ticket_id)
+        if not order_info or order_info.status == "closed":
+            logger.info(f"[TIMER] Тикет №{ticket_id} уже закрыт — отмена")
+            if timer_key in active_timers:
+                del active_timers[timer_key]
+            return
 
-        # Закрываем тикет
-        result = await db.get_auto_close_order(
-            ticket_id,
-            reason=f"Авто-закрытие (нет активности {timeout_minutes} мин)"
-        )
+        # 2. Отправляем предупреждение клиенту
+        try:
+            remaining_minutes = timeout_minutes - (warning_time // 60)
+            await bot.send_message(
+                chat_id=user_id,
+                text=f"⚠️ Если не ответишь в течение {remaining_minutes} минут, тикет закроется автоматически!"
+            )
+            logger.info(f"[TIMER] Предупреждение отправлено клиенту по тикету №{ticket_id}")
+        except TelegramForbiddenError:
+            reason = "Авто-закрытие (Клиент заблокировал бота)"
+            logger.warning(f"[TIMER] Клиент заблокировал бота, тикет №{ticket_id}")
+            await close_ticket(ticket_id, user_id, bot, reason)
+            if timer_key in active_timers:
+                del active_timers[timer_key]
+            return
 
-        if result and result.get("success"):
-            logger.info(f"[TIMER] Тикет №{ticket_id} успешно авто-закрыт")
+        # 3. Ждем оставшееся время
+        remaining_time = (timeout_minutes * 60) - warning_time
 
-            # Получаем информацию о тикете (загружаем заново после закрытия)
-            order = await db.get_orders_by_id(ticket_id)
+        try:
+            await asyncio.wait_for(asyncio.sleep(remaining_time), timeout=remaining_time + 10)
+        except asyncio.TimeoutError:
+            logger.warning(f"[TIMER] Таймер завершения для тикета №{ticket_id} превысил лимит времени")
+            return
+        except asyncio.CancelledError:
+            logger.info(f"[TIMER] Таймер завершения для тикета №{ticket_id} отменен")
+            raise
 
-            if order and result.get("group_id") and result.get("thread_id"):
-                # Уведомляем саппорта если есть support_id
-                if hasattr(order, 'support_id') and order.support_id:
-                    try:
-                        await bot.send_message(
-                            chat_id=int(order.support_id),
-                            text=f"⏰ Тикет №{ticket_id} автоматически закрыт из-за неактивности клиента"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Не удалось уведомить саппорта: {e}")
+        # Проверяем, активен ли еще таймер
+        if active_timers.get(timer_key) != asyncio.current_task():
+            logger.info(f"[TIMER] Таймер для тикета №{ticket_id} был заменен или отменен")
+            return
 
-                # Пробуем закрыть топик
-                try:
-                    await bot.close_forum_topic(
-                        chat_id=int(result['group_id']),
-                        message_thread_id=int(result['thread_id'])
-                    )
-                    logger.info(f"Топик {result['thread_id']} закрыт в Telegram")
-                except Exception as e:
-                    logger.warning(f"Не удалось закрыть топик: {e}")
+        # 4. Проверяем статус тикета
+        order_info = await db.get_orders_by_id(ticket_id)
+        if not order_info or order_info.status == "closed":
+            logger.info(f"[TIMER] Тикет №{ticket_id} был закрыт вручную после предупреждения")
+            if timer_key in active_timers:
+                del active_timers[timer_key]
+            return
 
-                # Обновляем сообщение в группе
-                await update_ticket_message_in_group(bot, ticket_id, order)
+        # 5. Проверяем активность клиента через Redis
+        message_count = await redis_client.get(f"messages:{ticket_id}")
 
-        elif result and not result.get("success"):
-            logger.error(f"[TIMER] Ошибка авто-закрытия тикета №{ticket_id}: {result.get('error')}")
+        if message_count is None or int(message_count) == 0:
+            # Клиент не отвечал
+            try:
+                await bot.send_chat_action(chat_id=user_id, action="typing")
+                reason = f"Авто-закрытие (Клиент не ответил в течение {timeout_minutes} мин)"
+            except TelegramForbiddenError:
+                reason = "Авто-закрытие (Клиент заблокировал бота)"
+                logger.warning(f"[TIMER] Клиент заблокировал бота до авто-закрытия тикета №{ticket_id}")
+
+            await close_ticket(ticket_id, user_id, bot, reason)
+            logger.info(f"[TIMER] Тикет №{ticket_id} закрыт автоматически")
         else:
-            logger.error(f"[TIMER] Неизвестная ошибка при авто-закрытии тикета №{ticket_id}")
+            logger.info(f"[TIMER] Тикет №{ticket_id} не закрыт — клиент отправил {message_count} сообщений")
 
-        # Удаляем таймер
-        if ticket_id in active_timers:
-            del active_timers[ticket_id]
+        # Очищаем счетчик сообщений в Redis
+        await redis_client.delete(f"messages:{ticket_id}")
 
     except asyncio.CancelledError:
         logger.info(f"[TIMER] Таймер авто-закрытия для тикета №{ticket_id} отменён")
-        # Очищаем таймер при отмене
-        if ticket_id in active_timers:
-            del active_timers[ticket_id]
+        raise
     except Exception as e:
-        logger.error(f"[TIMER] Ошибка авто-закрытия тикета №{ticket_id}: {e}")
-        # Очищаем таймер при ошибке
-        if ticket_id in active_timers:
-            del active_timers[ticket_id]
+        logger.error(f"[TIMER ERROR] Ошибка при авто-закрытии тикета №{ticket_id}: {e}", exc_info=True)
+    finally:
+        # Всегда очищаем таймер
+        timer_key = f"timer_{ticket_id}"
+        if timer_key in active_timers and active_timers[timer_key] == asyncio.current_task():
+            del active_timers[timer_key]
 
 
-async def update_ticket_message_in_group(bot: Bot, ticket_id: int, order):
-    """Обновляет сообщение о тикете в группе"""
+async def handle_auto_close_timer(ticket_id: int, user_id: int, bot: Bot, is_support_reply: bool = False):
+    """
+    Обрабатывает таймер авто-закрытия тикета
+    """
     try:
+        # Проверяем, что ticket_id не None
+        if not ticket_id:
+            logger.warning(f"Не передан ticket_id для пользователя {user_id}")
+            return
 
-        msg_info = await db.get_all_message(ticket_id)
-        if msg_info and hasattr(msg_info, 'support_message_id'):
-            message_text = (
-                f"⏰ *Авто-закрытие тикета*\n\n"
-                f"📩 Тикет №{ticket_id}\n"
-                f"👤 Клиент: @{order.client_name}\n"
-                f"🆔 ID: {order.client_id}\n"
-                f"🛠 Услуга: {order.service_name}\n"
-                f"👨‍💻 Саппорт: @{order.support_name}\n"
-                f"⏳ Создан: {order.created_at.strftime('%d.%m.%Y %H:%M')}\n"
-                f"⏳ Закрыт: {order.completed_at.strftime('%d.%m.%Y %H:%M') if order.completed_at else 'автоматически'}\n"
-                f"📝 Причина: неактивность клиента"
-            )
+        timer_key = f"timer_{ticket_id}"
 
-            await bot.edit_message_text(
-                chat_id=int(os.getenv('GROUP_CHAT_ID')),
-                message_id=int(msg_info.support_message_id),
-                text=message_text,
-                parse_mode="Markdown"
-            )
-    except Exception as e:
-        logger.error(f"Ошибка обновления сообщения тикета: {e}")
+        # 1. Отменяем предыдущий таймер, если есть
+        if timer_key in active_timers:
+            old_task = active_timers[timer_key]
 
-
-async def handle_auto_close_timer(ticket_id: int, user_id: int, bot: Bot):
-    """Обрабатывает таймер авто-закрытия тикета"""
-    if not ticket_id:
-        return
-
-    # Отменяем существующий таймер для этого тикета
-    if ticket_id in active_timers:
-        try:
-            task = active_timers[ticket_id]
-            if not task.done():
-                task.cancel()
+            # Проверяем, не завершена ли уже задача
+            if not old_task.done():
+                # Отменяем задачу
+                old_task.cancel()
                 try:
-                    await task
+                    # Ждем завершения отмененной задачи, но с таймаутом
+                    await asyncio.wait_for(old_task, timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[TIMER] Таймаут при отмене таймера {ticket_id}")
                 except asyncio.CancelledError:
-                    pass
-        except Exception as e:
-            logger.error(f"Ошибка при отмене таймера {ticket_id}: {e}")
+                    logger.debug(f"[TIMER] Таймер {ticket_id} отменен успешно")
+                except Exception as cancel_error:
+                    # Логируем ошибку отмены, но продолжаем
+                    logger.warning(f"[TIMER] Ошибка при отмене таймера {ticket_id}: {cancel_error}")
+            else:
+                logger.debug(f"[TIMER] Старый таймер {ticket_id} уже завершен")
 
-        del active_timers[ticket_id]
-        logger.info(f"[TIMER] Отменён таймер авто-закрытия тикета №{ticket_id} — клиент начал общение.")
+            # Удаляем старую задачу из словаря
+            if timer_key in active_timers:
+                del active_timers[timer_key]
 
-    # Запускаем новый таймер
-    task = asyncio.create_task(
-        auto_close_ticket_if_silent(ticket_id, user_id, bot),
-        name=f"auto_close_{ticket_id}"
+            if is_support_reply:
+                logger.info(f"[TIMER] Отменён таймер авто-закрытия тикета №{ticket_id} — саппорт ответил.")
+            else:
+                logger.info(f"[TIMER] Отменён таймер авто-закрытия тикета №{ticket_id} — клиент начал общение.")
+
+        # 2. Определяем, какой таймер запускать
+        if is_support_reply:
+            # Саппорт ответил - запускаем таймер ожидания ответа клиента (3 мин)
+            timeout_minutes = 3
+            reason = "ожидание ответа клиента"
+        else:
+            # Клиент написал - запускаем таймер ожидания ответа саппорта (10 мин)
+            timeout_minutes = 10
+            reason = "ожидание ответа саппорта"
+
+        # 3. Запускаем новый таймер
+        task = asyncio.create_task(
+            auto_close_ticket_if_silent(ticket_id, user_id, bot, timeout_minutes),
+            name=f"auto_close_{ticket_id}"
+        )
+        active_timers[timer_key] = task
+        logger.info(f"[TIMER] Запущен таймер авто-закрытия тикета №{ticket_id} ({reason}, {timeout_minutes} мин)")
+
+    except Exception as e:
+        logger.error(f"[DEBUG] Полная ошибка при обработке таймера для тикета {ticket_id}:")
+        logger.error(f"[DEBUG] Тип: {type(e).__name__}")
+        logger.error(f"[DEBUG] Сообщение: {str(e)}")
+        logger.error(f"[DEBUG] Трассировка:")
+        for line in traceback.format_exc().split('\n'):
+            if line:  # Пропускаем пустые строки
+                logger.error(f"[DEBUG] {line}")
+
+
+async def safe_cancel_task(ticket_id: int):
+    """Безопасная отмена задачи"""
+    timer_key = f"timer_{ticket_id}"
+    if timer_key in active_timers:
+        task = active_timers[timer_key]
+        if not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=1.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            except Exception as e:
+                logger.warning(f"[TIMER] Ошибка при безопасной отмене таймера {ticket_id}: {e}")
+        del active_timers[timer_key]
+        logger.info(f"[TIMER] Таймер для тикета №{ticket_id} безопасно отменен")
+
+
+async def cancel_all_timers():
+    """Отмена всех активных таймеров (для перезапуска бота)"""
+    cancelled_count = 0
+    for timer_key, task in list(active_timers.items()):
+        if not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=1.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            except Exception as e:
+                logger.warning(f"[TIMER] Ошибка при отмене таймера {timer_key}: {e}")
+        del active_timers[timer_key]
+        cancelled_count += 1
+
+    logger.info(f"[TIMER] Все активные таймеры отменены ({cancelled_count} штук)")
+
+
+async def close_ticket(ticket_id: int, client_id: int, bot: Bot, reason: str):
+    """Закрывает тикет автоматически"""
+    try:
+        # Используем правильное имя параметра
+        await db.get_auto_close_order(ticket_id, reason=reason)
+
+        order_info = await db.get_orders_by_id(ticket_id)
+        if not order_info:
+            logger.warning(f"[TIMER] Не найден тикет №{ticket_id} для уведомлений")
+            return
+
+        # Очищаем Redis
+        await redis_client.delete(f"ticket:{order_info.client_id}")
+        await redis_client.delete(f'chat:{order_info.client_id}')
+        await redis_client.delete(f"role:{order_info.client_id}")
+        await redis_client.delete(f"messages:{ticket_id}")
+        await redis_client.delete(f"ticket:{order_info.support_id}")
+        await redis_client.delete(f'chat:{order_info.support_id}')
+        await redis_client.delete(f"role:{order_info.support_id}")
+
+        logger.info(f"[TIMER] Тикет №{ticket_id} закрыт автоматически: {reason}")
+
+        # Обновляем сообщение в группе
+        message_info = await db.get_all_message(ticket_id)
+        if message_info and hasattr(message_info, 'support_message_id'):
+            message_edit_text = format_ticket_closed_message(order_info, reason)
+            await bot.edit_message_text(
+                message_id=int(message_info.support_message_id),
+                chat_id=GROUP_CHAT_ID,
+                text=message_edit_text,
+                parse_mode="HTML"
+            )
+            await unpin_specific_message(bot, GROUP_CHAT_ID, int(message_info.support_message_id))
+
+        # Уведомляем саппорт
+        try:
+            await bot.send_message(
+                chat_id=order_info.support_id,
+                text=f"🚪 Тикет №{ticket_id} закрыт автоматически. {reason}"
+            )
+        except TelegramForbiddenError:
+            logger.warning(f"[TIMER] Support заблокировал бота — уведомление не отправлено")
+
+        # Уведомляем клиента
+        if "не ответил" in reason:
+            try:
+                await bot.send_message(
+                    chat_id=client_id,
+                    text=f"⛔️ Тикет №{ticket_id} был закрыт автоматически из-за отсутствия ответа. Вы можете создать новый, если помощь всё ещё нужна."
+                )
+            except TelegramForbiddenError:
+                logger.warning(f"[TIMER] Клиент заблокировал бота — уведомление не отправлено")
+
+    except Exception as e:
+        logger.error(f"[CLOSE ERROR] Ошибка при закрытии тикета №{ticket_id}: {e}")
+
+
+def format_ticket_closed_message(order, reason: str) -> str:
+    """Форматирует сообщение о закрытии тикета"""
+    import html
+    return (
+        f"❗️ Тикет закрыт автоматически!\n"
+        f"<b>Причина:</b> {reason}\n\n"
+        f"📩 <b>Тикет</b> №{order.id}\n"
+        f"👤 <b>Пользователь:</b> @{order.client_name}\n"
+        f"🆔 <b>ID:</b> {order.client_id}\n"
+        f"<a href=\"https://t.me/{html.escape(order.client_name)}\">🔗 1.Телеграм</a>\n"
+        f"<a href=\"tg://user?id={order.client_id}\">🔗 2.Телеграм</a>\n"
+        f"🛠 <b>Услуга:</b> {order.service_name}\n"
+        f"🆔 <b>Support_id:</b> {order.support_id}\n"
+        f"👨‍💻 <b>Support_name:</b> @{order.support_name}\n"
+        f"ℹ️ <b>Статус:</b> {order.status}\n"
+        f"⏳ <b>Создана:</b> {order.created_at.strftime('%d-%m-%Y %H:%M:%S')}\n\n"
+        f"⏳ <b>Принята:</b> {order.accept_at.strftime('%d-%m-%Y %H:%M:%S') if order.accept_at else 'не принята'}\n\n"
+        f"⏳ <b>Закрыта:</b> {order.completed_at.strftime('%d-%m-%Y %H:%M:%S') if order.completed_at else 'автоматически'}\n\n"
+        f"<a href=\"https://t.me/GBPSupport_bot\">Перейти в бота</a>"
     )
-    active_timers[ticket_id] = task
-    logger.info(f"[TIMER] Запущен таймер авто-закрытия тикета №{ticket_id}")
+
+
+async def unpin_specific_message(bot: Bot, chat_id: int, message_id: int):
+    """Открепляет конкретное сообщение"""
+    try:
+        await bot.unpin_chat_message(
+            chat_id=chat_id,
+            message_id=message_id
+        )
+        logger.info(f"Сообщение {message_id} откреплено!")
+    except TelegramAPIError as e:
+        logger.error(f"Ошибка при откреплении сообщения: {e}")

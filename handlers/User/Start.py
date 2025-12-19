@@ -14,7 +14,7 @@ from html import escape as html_escape
 from handlers.Chat import topic_cache
 from handlers.User.common_states import StarsOrder
 from handlers.Worker.Start import active_timers
-from handlers.utils.timers import auto_close_ticket_if_silent
+from handlers.utils.timers import auto_close_ticket_if_silent, handle_auto_close_timer
 from logger import logger
 from core.dictionary import *
 from handlers.User.keyboard.replykeqyboard import get_start_menu, get_media_start_kb, get_user_stars_kb
@@ -536,7 +536,6 @@ async def star_worker(message: Message, state: FSMContext):
 async def handle_user_private_messages(message: Message, bot: Bot):
     """
     Обрабатывает сообщения пользователей и пересылает в топик
-    Добавлены: таймер авто-закрытия и дублирование в общий чат
     """
     # Игнорируем команды
     if message.text and message.text.startswith('/'):
@@ -545,105 +544,80 @@ async def handle_user_private_messages(message: Message, bot: Bot):
     user_id = message.from_user.id
     logger.info(f"📨 Сообщение от пользователя {user_id}")
 
-    # 1. Проверяем кэш Redis
-    thread_id = await topic_cache.get_thread_by_client(user_id)
-
-    if thread_id:
-        # Есть в кэше - отправляем в топик
-        await forward_to_topic_with_timer(message, bot, thread_id, user_id)
-        return
-
-    # 2. Ищем в БД
-    chat_info = await db.get_chat_by_client_id(user_id)
-    if not chat_info:
-        # Нет активного чата
-        await handle_no_active_chat(message, bot, user_id)
-        return
-
-    thread_id = chat_info['thread_id']
-    group_id = chat_info['group_id']
-    ticket_id = chat_info.get('order_id')
-
-    # Сохраняем в кэш
-    await topic_cache.set_mapping(thread_id, user_id)
-
-    # Отправляем в топик
-    await forward_to_topic_with_timer_and_group(message, bot, group_id, thread_id, user_id, ticket_id)
-
-
-async def forward_to_topic_with_timer(message: Message, bot: Bot, thread_id: int, user_id: int):
-    """Пересылает сообщение в топик с обработкой таймера"""
     try:
-        # Получаем полную информацию из БД
-        chat_info = await db.get_chat_by_thread_id(thread_id)
-        if not chat_info:
-            # Данные устарели
-            await topic_cache.remove_by_client(user_id)
-            await message.answer("❌ Чат не найден. Начните новый диалог.")
+        # 1. Получаем полную информацию из кэша
+        cached_info = await topic_cache.get_full_mapping(client_telegram_id=user_id)
+
+        if cached_info:
+            # Есть в кэше - отправляем в топик
+            await forward_to_topic_with_timer_and_group(
+                message, bot,
+                cached_info['group_id'],
+                cached_info['thread_id'],
+                user_id,
+                cached_info['ticket_id']
+            )
             return
 
+        # 2. Ищем в БД
+        chat_info = await db.get_chat_by_client_id(user_id)
+        if not chat_info:
+            # Нет активного чата
+            await handle_no_active_chat(message, bot, user_id)
+            return
+
+        thread_id = chat_info['thread_id']
         group_id = chat_info['group_id']
         ticket_id = chat_info.get('order_id')
 
-        # 1. Обработка таймера авто-закрытия
-        await handle_auto_close_timer(ticket_id, user_id, bot)
-
-        # 2. Отправляем в топик
-        await bot.copy_message(
-            chat_id=group_id,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id,
-            message_thread_id=thread_id
+        # Сохраняем ВСЮ информацию в кэш
+        await topic_cache.set_mapping(
+            thread_id=thread_id,
+            client_telegram_id=user_id,
+            group_id=group_id,
+            ticket_id=ticket_id
         )
-        logger.info(f"✅ Сообщение от {user_id} -> топик {thread_id}")
 
-        # 3. Отправляем копию в общий чат (если настроен)
-        await send_to_backup_chat(message, bot, user_id, ticket_id)
+        # Отправляем в топик
+        await forward_to_topic_with_timer_and_group(
+            message, bot, group_id, thread_id, user_id, ticket_id
+        )
 
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки в топик: {e}")
-        await handle_send_error(message, user_id, e)
+        logger.error(f"❌ Ошибка обработки сообщения от {user_id}: {e}", exc_info=True)
+        await message.answer("Произошла ошибка при отправке сообщения")
 
 
 async def forward_to_topic_with_timer_and_group(message: Message, bot: Bot, group_id: int, thread_id: int, user_id: int,
-                                                ticket_id: int = None):
-    """Пересылает сообщение в топик (с известным group_id) с таймером"""
+                                                ticket_id: int = None, is_support_reply: bool = False):
+    """Пересылает сообщение в топик с обработкой таймера"""
     try:
         # 1. Обработка таймера авто-закрытия
-        await handle_auto_close_timer(ticket_id, user_id, bot)
+        if ticket_id:
+            await handle_auto_close_timer(ticket_id, user_id, bot, is_support_reply=is_support_reply)
+        else:
+            logger.warning(f"Нет ticket_id для thread_id {thread_id}, таймер не обработан")
 
-        # 2. Отправляем в топик
+
+        # 3. Отправляем в топик
         await bot.copy_message(
             chat_id=group_id,
             from_chat_id=message.chat.id,
             message_id=message.message_id,
             message_thread_id=thread_id
         )
-        logger.info(f"✅ Сообщение от {user_id} -> топик {thread_id}")
 
-        # 3. Отправляем копию в общий чат (если настроен)
+        if is_support_reply:
+            logger.info(f"✅ Сообщение от саппорта -> топик {thread_id}")
+        else:
+            logger.info(f"✅ Сообщение от {user_id} -> топик {thread_id}")
+
+        # 4. Отправляем копию в общий чат (если настроен)
         await send_to_backup_chat(message, bot, user_id, ticket_id)
 
     except Exception as e:
         logger.error(f"❌ Ошибка отправки: {e}")
         await handle_send_error(message, user_id, e)
-
-
-async def handle_auto_close_timer(ticket_id: int, user_id: int, bot: Bot):
-    """Обрабатывает таймер авто-закрытия тикета"""
-    if not ticket_id:
-        return
-
-    # Отменяем существующий таймер для этого тикета
-    if ticket_id in active_timers:
-        active_timers[ticket_id].cancel()
-        del active_timers[ticket_id]
-        logger.info(f"[TIMER] Отменён таймер авто-закрытия тикета №{ticket_id} — клиент начал общение.")
-
-    # Запускаем новый таймер
-    task = asyncio.create_task(auto_close_ticket_if_silent(ticket_id, user_id, bot))
-    active_timers[ticket_id] = task
-    logger.info(f"[TIMER] Запущен таймер авто-закрытия тикета №{ticket_id}")
 
 
 async def send_to_backup_chat(message: Message, bot: Bot, user_id: int, ticket_id: int = None):
