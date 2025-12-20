@@ -1,6 +1,7 @@
 import asyncio
 import time
 import pytz
+from aiogram import Bot
 from dotenv import load_dotenv
 from sqlalchemy import select, delete, update, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -875,7 +876,7 @@ class DataBase:
             finally:
                 await session.close()
 
-    async def get_auto_close_order(self, order_id, reason: str = "Авто-закрытие (Клиент не ответил)"):
+    async def get_auto_close_order(self, order_id, reason: str = "Авто-закрытие (Клиент не ответил)", bot: Bot = None):
         """
         Автоматическое закрытие тикета
         """
@@ -935,6 +936,7 @@ class DataBase:
                 thread_id = None
                 support_group_id = None
                 topic_found = False
+                topic_deleted = False
 
                 logger.debug(f"📝 [TICKET #{order_id}] 4. Поиск топика в группах поддержки...")
 
@@ -957,14 +959,38 @@ class DataBase:
 
                         logger.info(f"📌 Найден топик: thread_id={thread_id}, group_id={support_group_id}")
 
-                        # Удаляем запись о топике
+                        # Удаляем топик в Telegram, если есть бот
+                        if bot and thread_id and support_group_id:
+                            try:
+                                # Пытаемся удалить топик (форум-топик) в Telegram
+                                await bot.delete_forum_topic(
+                                    chat_id=support_group_id,
+                                    message_thread_id=thread_id
+                                )
+                                topic_deleted = True
+                                logger.info(f"🗑️ Топик {thread_id} удален в Telegram")
+                            except Exception as telegram_error:
+                                logger.error(f"⚠️ Не удалось удалить топик в Telegram: {telegram_error}")
+                                # Если не удалось удалить топик, можно попробовать закрыть его
+                                try:
+                                    await bot.close_forum_topic(
+                                        chat_id=support_group_id,
+                                        message_thread_id=thread_id
+                                    )
+                                    logger.info(f"🔒 Топик {thread_id} закрыт в Telegram")
+                                except Exception as close_error:
+                                    logger.error(f"⚠️ Не удалось закрыть топик в Telegram: {close_error}")
+                        else:
+                            logger.warning(f"ℹ️ Бот не предоставлен для удаления топика")
+
+                        # Удаляем запись о топике из БД
                         await session.delete(ticket)
                         logger.debug(f"🗑️ Запись топика удалена из БД")
                     else:
                         logger.info(f"ℹ️ Топик не найден для тикета {order_id}")
 
                 except Exception as topic_error:
-                    logger.error(f"⚠️ Ошибка при поиске топика: {topic_error}")
+                    logger.error(f"⚠️ Ошибка при поиске/удалении топика: {topic_error}")
                     # Продолжаем закрытие тикета даже без удаления топика
 
                 logger.debug(f"📝 [TICKET #{order_id}] 5. Коммит изменений в БД...")
@@ -981,10 +1007,11 @@ class DataBase:
                     "order_id": order_id,
                     "thread_id": thread_id,
                     "group_id": support_group_id,
-                    "client_id": client_id,  # Используем сохраненное значение
+                    "client_id": client_id,
                     "topic_found": topic_found,
+                    "topic_deleted": topic_deleted,
                     "status": "closed",
-                    "service_name": service_name  # Добавляем для информации
+                    "service_name": service_name
                 }
 
             except Exception as e:

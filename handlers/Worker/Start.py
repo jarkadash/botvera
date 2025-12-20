@@ -16,7 +16,7 @@ import asyncio
 from colorama import Fore, Style
 
 from handlers.Worker.common_states import FormOrderShema
-from handlers.utils.timers import close_ticket, auto_close_ticket_if_silent
+from handlers.utils.timers import close_ticket, auto_close_ticket_if_silent, active_timers, create_ticket_timer
 from logger import logger
 from core.dictionary import *
 from handlers.User.keyboard.replykeqyboard import *
@@ -27,7 +27,6 @@ from database.models import Roles, Users
 import pandas as pd
 
 db = DataBase()
-active_timers = {}
 worker_router = Router()
 
 
@@ -96,8 +95,7 @@ async def accept_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                         f"Команда /stop_chat — завершить диалог"
                     )
                 )
-                task = asyncio.create_task(auto_close_ticket_if_silent(order_id, updated_order.client_id, bot))
-                active_timers[order_id] = task
+                task = await create_ticket_timer(order_id, updated_order.client_id, bot)
                 if updated_order.service_name == "Техническая помощь / Technical Support":
                     await bot.send_message(
                         chat_id=int(updated_order.client_id),
