@@ -43,15 +43,20 @@ bot = Bot(token=token, default=DefaultBotProperties(parse_mode='HTML'))
 dp = Dispatcher(storage=storage)
 GB_GROUP = getenv('GP')
 GB_THREAD_ID = getenv('CHAT_ID_TIKETS_SUPPORT')
+
+
 async def start_up(bot: Bot):
     await bot.send_message(chat_id=434791099, text='Бот запущен')
+
 
 async def stop_up(bot: Bot):
     await bot.send_message(chat_id=434791099, text='Бот остановлен')
 
+
 dp.startup.register(start_up)
 dp.shutdown.register(stop_up)
-dp.include_routers(admin_router, worker_router, start_router,  media_router, group_router, chat_router)
+dp.include_routers(admin_router, worker_router, media_router, start_router, group_router, chat_router)
+
 
 async def start():
     try:
@@ -65,6 +70,7 @@ async def start():
     finally:
         await bot.session.close()
 
+
 async def unpin_specific_message(bot: Bot, chat_id: int, message_id: int):
     try:
         await bot.unpin_chat_message(
@@ -74,6 +80,7 @@ async def unpin_specific_message(bot: Bot, chat_id: int, message_id: int):
         print(f"Сообщение {message_id} откреплено!")
     except TelegramAPIError as e:
         print(f"Ошибка: {e}")
+
 
 async def start_check(bot: Bot):
     try:
@@ -98,7 +105,8 @@ async def start_check(bot: Bot):
                                     chat_id=int(message['chat_id']),
                                     message_id=int(message['client_message_id'])
                                 )
-                                logger.debug(Fore.GREEN + f'Удалено сообщение {message["client_message_id"]}' + Style.RESET_ALL)
+                                logger.debug(
+                                    Fore.GREEN + f'Удалено сообщение {message["client_message_id"]}' + Style.RESET_ALL)
                             except Exception as delete_error:
                                 logger.error(Fore.RED + f'Ошибка удаления сообщения: {delete_error}' + Style.RESET_ALL)
                         if message.get('support_message_id'):
@@ -117,6 +125,7 @@ async def start_check(bot: Bot):
                                         return default
                                     except Exception:
                                         return default
+
                                 client_name = html.escape(order.get('client_name', 'N/A'))
                                 telegram_link = f'<a href="https://t.me/{client_name}">🔗 1.Телеграм</a>' if client_name != 'N/A' else ''
                                 await bot.edit_message_text(
@@ -137,9 +146,11 @@ async def start_check(bot: Bot):
                                     parse_mode="HTML"
                                 )
                                 await unpin_specific_message(bot, GROUP_CHAT_ID, int(message['support_message_id']))
-                                logger.debug(Fore.GREEN + f'Откреплено сообщение {message["support_message_id"]}' + Style.RESET_ALL)
+                                logger.debug(
+                                    Fore.GREEN + f'Откреплено сообщение {message["support_message_id"]}' + Style.RESET_ALL)
                             except Exception as edit_error:
-                                logger.error(Fore.RED + f'Ошибка редактирования сообщения: {edit_error}' + Style.RESET_ALL)
+                                logger.error(
+                                    Fore.RED + f'Ошибка редактирования сообщения: {edit_error}' + Style.RESET_ALL)
                     except Exception as msg_error:
                         logger.error(Fore.RED + f'Ошибка обработки сообщения: {msg_error}' + Style.RESET_ALL)
                 try:
@@ -193,7 +204,7 @@ async def check_tickets_periodically(bot: Bot, interval_minutes: int = 25):
 
                 try:
                     await bot.send_message(
-                    chat_id=int(GB_GROUP),
+                        chat_id=int(GB_GROUP),
                         message_thread_id=GB_THREAD_ID,
                         text=message, parse_mode="HTML")
                 except Exception as e:
@@ -207,6 +218,7 @@ async def check_tickets_periodically(bot: Bot, interval_minutes: int = 25):
             # Снова ждем
             await asyncio.sleep(interval_minutes * 60)
 
+
 async def start_scheduler(bot: Bot):
     scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
     scheduler.add_job(
@@ -217,7 +229,8 @@ async def start_scheduler(bot: Bot):
         args=(bot,)
     )
     scheduler.start()
-    logger.info(Fore.GREEN +"Планировщик запущен! Проверка будет каждые 00:20 минут" + Style.RESET_ALL)
+    logger.info(Fore.GREEN + "Планировщик запущен! Проверка будет каждые 00:20 минут" + Style.RESET_ALL)
+
 
 if __name__ == '__main__':
     asyncio.run(start())
