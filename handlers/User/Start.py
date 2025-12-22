@@ -546,16 +546,19 @@ async def handle_user_private_messages(message: Message, bot: Bot):
 
     try:
         # 1. Получаем полную информацию из кэша
-        cached_info = await topic_cache.get_full_mapping(client_telegram_id=user_id)
+        cached_mapping = await topic_cache.get_mapping_by_client(client_telegram_id=user_id)
 
-        if cached_info:
+        if cached_mapping:
             # Есть в кэше - отправляем в топик
+            logger.info(
+                f"✅ Данные из кэша для клиента {user_id}: thread {cached_mapping['thread_id']}, group {cached_mapping['group_id']}")
+
             await forward_to_topic_with_timer_and_group(
                 message, bot,
-                cached_info['group_id'],
-                cached_info['thread_id'],
+                cached_mapping['group_id'],
+                cached_mapping['thread_id'],
                 user_id,
-                cached_info['ticket_id']
+                cached_mapping.get('ticket_id')
             )
             return
 
@@ -577,6 +580,8 @@ async def handle_user_private_messages(message: Message, bot: Bot):
             group_id=group_id,
             ticket_id=ticket_id
         )
+
+        logger.info(f"💾 Сохранено в кэш: client {user_id} -> thread {thread_id}, group {group_id}")
 
         # Отправляем в топик
         await forward_to_topic_with_timer_and_group(

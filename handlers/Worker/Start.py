@@ -489,13 +489,13 @@ async def add_problem_description_for_form(message: Message, state: FSMContext):
 
     problem_description = message.text
     await state.update_data(problem_description=problem_description)
-    await message.answer("Введите характеристики пк пользователя который обратился:")
+    await message.answer("Введите характеристику пользователя который обратился (Тип опишите как он общался например: хорошо или буйный):")
     await state.set_state(FormOrderShema.specifications)
 
 
 @worker_router.message(FormOrderShema.specifications)
 async def add_specifications_for_form(message: Message, state: FSMContext, bot: Bot):
-    logger.info(f"Пользователь ввел характеристики пк: {message.text}")
+    logger.info(f"Пользователь ввел характеристики : {message.text}")
     data = await state.get_data()
     saved_thread_id = data.get('thread_id')
 

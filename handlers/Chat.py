@@ -187,150 +187,154 @@ async def forward_message(message: Message):
         txt = "Press /start, then use the buttons." if lang == "en" else "Нажмите на /start, далее используйте кнопки!"
         await message.answer(txt)
 '''
+
+
 class RedisTopicCache:
     def __init__(self, redis_client, prefix: str = "topic_cache:", ttl_minutes: int = 30):
         self.redis = redis_client
         self.prefix = prefix
         self.ttl_seconds = ttl_minutes * 60
 
-    async def get_client_by_thread(self, thread_id: int) -> Optional[int]:
-        """Получить Telegram ID клиента по thread_id"""
+    async def get_mapping_by_thread_and_group(self, thread_id: int, group_id: int) -> Optional[Dict]:
+        """Получить маппинг по thread_id и group_id"""
         try:
-            # thread_id -> client_id
-            key = f"{self.prefix}thread:{thread_id}"
-            client_id = await self.redis.get(key)
-            if client_id:
+            # Ключ вида: topic_cache:group:{group_id}:thread:{thread_id}
+            key = f"{self.prefix}group:{group_id}:thread:{thread_id}"
+            data = await self.redis.hgetall(key)
+
+            if data and data.get('client_id'):
                 # Обновляем TTL при доступе
                 await self.redis.expire(key, self.ttl_seconds)
-                return int(client_id)
+
+                return {
+                    'client_id': int(data['client_id']),
+                    'ticket_id': int(data.get('ticket_id', 0)) if data.get('ticket_id') else None,
+                    'thread_id': thread_id,
+                    'group_id': group_id,
+                    'support_id': int(data.get('support_id', 0)) if data.get('support_id') else None,
+                    'created_at': data.get('created_at')
+                }
         except Exception as e:
-            logger.error(f"Ошибка Redis get_client_by_thread: {e}")
+            logger.error(f"Ошибка Redis get_mapping_by_thread_and_group: {e}")
         return None
 
-    async def get_thread_by_client(self, client_telegram_id: int):
-        """Получить thread_id по client_id"""
+    async def get_mapping_by_client(self, client_telegram_id: int) -> Optional[Dict]:
+        """Получить маппинг по client_id"""
         try:
-            client_key = f"{self.prefix}client:{client_telegram_id}"
-            thread_id = await self.redis.get(client_key)
+            # Ищем все ключи с этим client_id
+            pattern = f"{self.prefix}client:{client_telegram_id}:*"
+            keys = await self.redis.keys(pattern)
 
-            if thread_id:
-                # Получаем дополнительные данные из БД
-                chat_info = await db.get_chat_by_thread_id(int(thread_id))
-                if chat_info:
-                    return {
-                        "thread_id": int(thread_id),
-                        "group_id": chat_info.get('group_id'),
-                        "ticket_id": chat_info.get('order_id'),
-                        "client_id": client_telegram_id
-                    }
-                else:
-                    # Данные устарели, удаляем из кэша
-                    await self.remove_by_client(client_telegram_id)
-                    return None
-            return None
-        except Exception as e:
-            logger.error(f"Ошибка Redis get_thread_by_client: {e}")
-            return None
-
-    async def get_full_mapping(self, client_telegram_id: int = None, thread_id: int = None):
-        """Получить полную информацию о маппинге"""
-        try:
-            if client_telegram_id:
-                # Ищем по client_id
-                client_key = f"{self.prefix}client:{client_telegram_id}"
-                thread_id = await self.redis.get(client_key)
-                if not thread_id:
-                    return None
-
-            if not thread_id:
+            if not keys:
                 return None
 
-            # Получаем информацию из БД
-            chat_info = await db.get_chat_by_thread_id(int(thread_id))
-            if not chat_info:
-                # Данные устарели, очищаем кэш
-                if client_telegram_id:
-                    await self.remove_by_client(client_telegram_id)
-                await self.remove_by_thread(thread_id)
-                return None
+            # Берем первый ключ (обычно у клиента только один активный тикет)
+            key = keys[0]
+            data = await self.redis.hgetall(key)
 
-            return {
-                "thread_id": int(thread_id),
-                "group_id": chat_info.get('group_id'),
-                "ticket_id": chat_info.get('order_id'),
-                "client_id": chat_info.get('client_id'),
-                "client_telegram_id": client_telegram_id or chat_info.get('client_id')
-            }
+            if data and data.get('thread_id'):
+                # Обновляем TTL при доступе
+                await self.redis.expire(key, self.ttl_seconds)
 
+                # Извлекаем group_id из ключа
+                parts = key.split(':')
+                group_id = int(parts[-1]) if len(parts) > 2 else None
+
+                return {
+                    'client_id': client_telegram_id,
+                    'ticket_id': int(data.get('ticket_id', 0)) if data.get('ticket_id') else None,
+                    'thread_id': int(data['thread_id']),
+                    'group_id': group_id,
+                    'support_id': int(data.get('support_id', 0)) if data.get('support_id') else None,
+                    'created_at': data.get('created_at')
+                }
         except Exception as e:
-            logger.error(f"Ошибка Redis get_full_mapping: {e}")
-            return None
+            logger.error(f"Ошибка Redis get_mapping_by_client: {e}")
+        return None
 
-    async def set_mapping(self, thread_id: int, client_telegram_id: int, group_id: int = None, ticket_id: int = None):
-        """Установить связь thread_id <-> client_id с дополнительными данными"""
+    async def set_mapping(self, thread_id: int, client_telegram_id: int, group_id: int,
+                          ticket_id: Optional[int] = None, support_id: Optional[int] = None):
+        """Установить связь thread_id <-> client_id для конкретной группы"""
         try:
-            # Основные связи
-            thread_key = f"{self.prefix}thread:{thread_id}"
-            await self.redis.setex(thread_key, self.ttl_seconds, str(client_telegram_id))
+            import json
+            from datetime import datetime
 
-            client_key = f"{self.prefix}client:{client_telegram_id}"
-            await self.redis.setex(client_key, self.ttl_seconds, str(thread_id))
-
-            # Дополнительные данные для thread_id
-            if group_id:
-                group_key = f"{self.prefix}group:{thread_id}"
-                await self.redis.setex(group_key, self.ttl_seconds, str(group_id))
-
-            if ticket_id:
-                ticket_key = f"{self.prefix}ticket:{thread_id}"
-                await self.redis.setex(ticket_key, self.ttl_seconds, str(ticket_id))
-
-            # Или сохранить все в одном хэше
-            mapping_key = f"{self.prefix}mapping:{thread_id}"
+            # 1. Сохраняем mapping по группе и треду
+            group_thread_key = f"{self.prefix}group:{group_id}:thread:{thread_id}"
             mapping_data = {
-                "client_id": str(client_telegram_id),
-                "group_id": str(group_id) if group_id else "",
-                "ticket_id": str(ticket_id) if ticket_id else ""
+                'client_id': str(client_telegram_id),
+                'thread_id': str(thread_id),
+                'group_id': str(group_id),
+                'ticket_id': str(ticket_id) if ticket_id else '',
+                'support_id': str(support_id) if support_id else '',
+                'created_at': datetime.now().isoformat()
             }
-            await self.redis.hset(mapping_key, mapping=mapping_data)
-            await self.redis.expire(mapping_key, self.ttl_seconds)
 
-            logger.info(f"Redis кэш: {thread_id} <-> {client_telegram_id} (group: {group_id}, ticket: {ticket_id})")
+            await self.redis.hset(group_thread_key, mapping=mapping_data)
+            await self.redis.expire(group_thread_key, self.ttl_seconds)
+
+            # 2. Сохраняем обратную ссылку client -> group
+            client_group_key = f"{self.prefix}client:{client_telegram_id}:{group_id}"
+            client_data = {
+                'thread_id': str(thread_id),
+                'ticket_id': str(ticket_id) if ticket_id else '',
+                'group_id': str(group_id),
+                'created_at': datetime.now().isoformat()
+            }
+
+            await self.redis.hset(client_group_key, mapping=client_data)
+            await self.redis.expire(client_group_key, self.ttl_seconds)
+
+            logger.info(
+                f"Redis кэш: группа {group_id}, thread {thread_id} <-> клиент {client_telegram_id} (тикет: {ticket_id})")
+
         except Exception as e:
             logger.error(f"Ошибка Redis set_mapping: {e}")
 
-    async def remove_by_thread(self, thread_id: int):
-        """Удалить по thread_id"""
+    async def remove_mapping(self, thread_id: int, group_id: int):
+        """Удалить маппинг по thread_id и group_id"""
         try:
-            # Сначала получаем client_id
-            thread_key = f"{self.prefix}thread:{thread_id}"
-            client_id = await self.redis.get(thread_key)
+            # 1. Получаем client_id из маппинга
+            group_thread_key = f"{self.prefix}group:{group_id}:thread:{thread_id}"
+            data = await self.redis.hgetall(group_thread_key)
 
-            if client_id:
-                # Удаляем client_id -> thread_id
-                client_key = f"{self.prefix}client:{int(client_id)}"
-                await self.redis.delete(client_key)
+            if data and data.get('client_id'):
+                client_id = int(data['client_id'])
 
-            # Удаляем thread_id -> client_id
-            await self.redis.delete(thread_key)
+                # 2. Удаляем обратную ссылку
+                client_group_key = f"{self.prefix}client:{client_id}:{group_id}"
+                await self.redis.delete(client_group_key)
+
+            # 3. Удаляем основной маппинг
+            await self.redis.delete(group_thread_key)
+
+            logger.info(f"Redis удален маппинг: группа {group_id}, thread {thread_id}")
 
         except Exception as e:
-            logger.error(f"Ошибка Redis remove_by_thread: {e}")
+            logger.error(f"Ошибка Redis remove_mapping: {e}")
 
     async def remove_by_client(self, client_telegram_id: int):
-        """Удалить по client_id"""
+        """Удалить все маппинги для клиента"""
         try:
-            # Сначала получаем thread_id
-            client_key = f"{self.prefix}client:{client_telegram_id}"
-            thread_id = await self.redis.get(client_key)
+            # Ищем все ключи клиента
+            pattern = f"{self.prefix}client:{client_telegram_id}:*"
+            keys = await self.redis.keys(pattern)
 
-            if thread_id:
-                # Удаляем thread_id -> client_id
-                thread_key = f"{self.prefix}thread:{int(thread_id)}"
-                await self.redis.delete(thread_key)
+            for client_key in keys:
+                # Получаем данные для нахождения thread_id
+                data = await self.redis.hgetall(client_key)
+                if data and data.get('thread_id') and data.get('group_id'):
+                    thread_id = int(data['thread_id'])
+                    group_id = int(data['group_id'])
 
-            # Удаляем client_id -> thread_id
-            await self.redis.delete(client_key)
+                    # Удаляем основной маппинг
+                    group_thread_key = f"{self.prefix}group:{group_id}:thread:{thread_id}"
+                    await self.redis.delete(group_thread_key)
+
+                # Удаляем ключ клиента
+                await self.redis.delete(client_key)
+
+            logger.info(f"Redis удалены все маппинги для клиента {client_telegram_id}")
 
         except Exception as e:
             logger.error(f"Ошибка Redis remove_by_client: {e}")
@@ -338,23 +342,28 @@ class RedisTopicCache:
     async def get_stats(self) -> Dict:
         """Получить статистику кэша"""
         try:
-            # Подсчитываем ключи по паттерну
-            import aioredis
-            thread_keys = await self.redis.keys(f"{self.prefix}thread:*")
-            client_keys = await self.redis.keys(f"{self.prefix}client:*")
+            # Подсчитываем ключи
+            group_thread_pattern = f"{self.prefix}group:*:thread:*"
+            client_pattern = f"{self.prefix}client:*:*"
+
+            group_thread_keys = await self.redis.keys(group_thread_pattern)
+            client_keys = await self.redis.keys(client_pattern)
 
             return {
-                'total_mappings': len(thread_keys),
-                'thread_keys': len(thread_keys),
-                'client_keys': len(client_keys)
+                'total_group_thread_mappings': len(group_thread_keys),
+                'total_client_mappings': len(client_keys)
             }
         except Exception as e:
             logger.error(f"Ошибка Redis get_stats: {e}")
-            return {'total_mappings': 0}
+            return {'total_group_thread_mappings': 0, 'total_client_mappings': 0}
+
+    async def cleanup_expired(self):
+        """Очистка просроченных записей (Redis делает это сам, но можно добавить ручную очистку)"""
+        pass
 
 
 # Глобальный экземпляр
-topic_cache = RedisTopicCache(redis_client, prefix="topic_chat:", ttl_minutes=3)
+topic_cache = RedisTopicCache(redis_client, prefix="topic_chat:", ttl_minutes=10)  # Увеличил TTL до 60 минут
 
 
 @chat_router.message(Command("close_chat"))
@@ -362,12 +371,7 @@ async def close_chat_command(message: Message, bot: Bot, state: FSMContext):
     """Закрыть текущий чат (заявку) из топика"""
     logger.info(f"Команда /close_chat от {message.from_user.username}")
 
-    get_data = await state.get_data()
-    ''' 
-    if get_data['thread_id']:
-            await message.answer(f"Сначала заполните форму в предыдущем тикете!")
-            return
-    '''
+
     if not message.message_thread_id:
         await message.answer("❌ Эта команда работает только в топиках")
         return
@@ -400,7 +404,7 @@ async def close_chat_command(message: Message, bot: Bot, state: FSMContext):
             return
 
         # Удаляем из кэша
-        await topic_cache.remove_by_thread(thread_id)
+        await topic_cache.remove_by_client(client_id)
 
         # Получаем полную информацию о заказе
         order = await db.get_orders_by_id(order_id)
@@ -503,32 +507,50 @@ async def handle_topic_message(message: Message, bot: Bot):
 
     if message.text and message.text.startswith('/'):
         return
+
     thread_id = message.message_thread_id
-    logger.info(f"📨 Сообщение в топике {thread_id} от @{message.from_user.username}")
+    group_id = message.chat.id  # правильно получаем group_id
+    logger.info(f"📨 Сообщение в топике {thread_id} (группа {group_id}) от @{message.from_user.username}")
 
     # 1. Проверяем кэш Redis
-    client_id = await topic_cache.get_client_by_thread(thread_id)
+    mapping = await topic_cache.get_mapping_by_thread_and_group(thread_id, group_id)
 
-    if not client_id:
+    if not mapping:
         # 2. Ищем в БД
         chat_info = await db.get_chat_by_thread_id(thread_id)
         if not chat_info:
-            logger.warning(f"Топик {thread_id} не найден")
+            logger.warning(f"Топик {thread_id} не найден в БД")
             return
 
         client_id = chat_info['client_id']
         ticket_id = chat_info.get('order_id')
 
         # 3. Сохраняем в кэш
-        await topic_cache.set_mapping(thread_id, client_id)
-    else:
-        # Получаем ticket_id из БД
-        chat_info = await db.get_chat_by_thread_id(thread_id)
-        ticket_id = chat_info.get('order_id') if chat_info else None
-    if chat_info.get('order_id') is None:
-        chat_info = await db.get_chat_by_thread_id(thread_id)
+        await topic_cache.set_mapping(
+            thread_id=thread_id,
+            client_telegram_id=client_id,
+            group_id=group_id,
+            ticket_id=ticket_id
+        )
+        logger.info(f"💾 Сохранено в кэш: thread {thread_id} -> client {client_id}, group {group_id}")
 
-    order_id = chat_info['order_id']  # если order_id есть
+    else:
+        # Получаем данные из кэша
+        client_id = mapping['client_id']
+        ticket_id = mapping.get('ticket_id')
+        logger.info(f"✅ Данные из кэша: thread {thread_id} -> client {client_id}")
+
+    # Если ticket_id не найден в кэше, пробуем получить из БД
+    if not ticket_id:
+        chat_info = await db.get_chat_by_thread_id(thread_id)
+        if chat_info:
+            ticket_id = chat_info.get('order_id')
+            order_id = chat_info.get('order_id')
+        else:
+            order_id = None
+    else:
+        order_id = ticket_id
+
     # 4. Отправляем в бэкап-чат (сообщение от саппорта)
     await send_support_message_to_backup(message, bot, thread_id, order_id, client_id, ticket_id)
 
@@ -539,7 +561,7 @@ async def handle_topic_message(message: Message, bot: Bot):
             from_chat_id=message.chat.id,
             message_id=message.message_id
         )
-        logger.info(f"✅ Сообщение из топика {thread_id} -> клиенту {client_id}")
+        logger.info(f"✅ Сообщение из топика {thread_id} (группа {group_id}) -> клиенту {client_id}")
 
         # 6. Обработка таймера (если есть ticket_id)
         if ticket_id:
@@ -551,7 +573,7 @@ async def handle_topic_message(message: Message, bot: Bot):
         error_msg = str(e).lower()
         if "blocked" in error_msg or "forbidden" in error_msg:
             logger.warning(f"⚠️ Клиент {client_id} заблокировал бота")
-            await topic_cache.remove_by_thread(thread_id)
+            await topic_cache.remove_mapping(thread_id, group_id)
 
             # Уведомляем в топик
             try:

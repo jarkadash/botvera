@@ -51,7 +51,7 @@ async def stop_up(bot: Bot):
 
 dp.startup.register(start_up)
 dp.shutdown.register(stop_up)
-dp.include_routers(admin_router, start_router, worker_router, media_router, group_router, chat_router)
+dp.include_routers(admin_router, worker_router, start_router,  media_router, group_router, chat_router)
 
 async def start():
     try:
