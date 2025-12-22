@@ -82,7 +82,7 @@ async def auto_close_ticket_if_silent(ticket_id: int, user_id: int, bot: Bot, ti
             # Клиент не отвечал
             try:
                 await bot.send_chat_action(chat_id=user_id, action="typing")
-                reason = f"Авто-закрытие (Клиент не ответил в течение {timeout_minutes} мин)"
+                reason = f"Авто-закрытие (Клиент не ответил)"
             except TelegramForbiddenError:
                 reason = "Авто-закрытие (Клиент заблокировал бота)"
                 logger.warning(f"[TIMER] Клиент заблокировал бота до авто-закрытия тикета №{ticket_id}")
