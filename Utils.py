@@ -27,18 +27,20 @@ def get_calculated_period(today=None):
     if 11 <= today.day <= 25:
         start_date = today.replace(day=11)
         end_date = today.replace(day=25)
-    elif today.day >= 26:
-        previous_month = (today.replace(day=1) - timedelta(days=1)).month
-        year = today.year if today.month > 1 else today.year - 1
-        start_date = today.replace(day=26)
-        end_date = today.replace(month=today.month % 12 + 1, day=10)
+
     else:
-        previous_month = (today.replace(day=1) - timedelta(days=1)).month
-        year = today.year if today.month > 1 else today.year - 1
-        start_date = today.replace(month=previous_month, year=year, day=26)
-        end_date = today.replace(day=10)
+        start_date = today.replace(day=26)
+
+        next_month = (start_date.replace(day=1) + timedelta(days=32)).replace(day=1)
+        end_date = next_month.replace(day=10)
+
+    if end_date < start_date:
+        raise ValueError(
+            f"Invalid calculated period: {start_date.date()} -> {end_date.date()}"
+        )
 
     return start_date.date(), end_date.date()
+
 
 def order_to_dict(order) -> dict:
     return {
