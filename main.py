@@ -64,7 +64,7 @@ async def start():
         await bot.delete_webhook(drop_pending_updates=True)
         await db.create_db()
         await set_commands(bot)
-        asyncio.create_task(check_tickets_periodically(bot, 25))
+        asyncio.create_task(check_tickets_periodically(bot, 3))
         group_manager.set_bot(bot)
         await dp.start_polling(bot, skip_updates=True)
     finally:
@@ -181,7 +181,7 @@ async def start_check(bot: Bot):
 
 
 # Простой планировщик в main.py
-async def check_tickets_periodically(bot: Bot, interval_minutes: int = 25):
+async def check_tickets_periodically(bot: Bot, interval_minutes: int = 3):
     """Периодически проверяет статистику тикетов"""
     logger.info(f"Запущена периодическая проверка тикетов каждые {interval_minutes} минут")
 
@@ -196,17 +196,21 @@ async def check_tickets_periodically(bot: Bot, interval_minutes: int = 25):
             if statistics:
                 message = (
                     f"📊 <b>Авто-отчет по тикетам</b>\n\n"
-                    f"🆕 Новые: {statistics['new_tickets']}\n"
-                    f"⚙️ В работе: {statistics['at_work_tickets']}\n"
+                    f"🆕 Новые (за {statistics['period']}): {statistics['new_tickets']}\n"
+                    f"⚙️ В работе (за {statistics['period']}): {statistics['at_work_tickets']}\n"
+                    f"\n<b>Завершено сегодня:</b>\n"
+                    f"🔧 Тех. помощь: {statistics['tech_support_completed_today']}\n"
+                    f"🔄 HWID reset: {statistics['hwid_reset_completed_today']}\n"
                 )
 
                 # Отправляем админам
-
                 try:
                     await bot.send_message(
                         chat_id=int(GB_GROUP),
                         message_thread_id=GB_THREAD_ID,
-                        text=message, parse_mode="HTML")
+                        text=message,
+                        parse_mode="HTML"
+                    )
                 except Exception as e:
                     logger.warning(f"Не удалось отправить статистику: {e}")
 
@@ -214,9 +218,6 @@ async def check_tickets_periodically(bot: Bot, interval_minutes: int = 25):
 
         except Exception as e:
             logger.error(f"Ошибка в периодической проверке: {e}")
-        finally:
-            # Снова ждем
-            await asyncio.sleep(interval_minutes * 60)
 
 
 async def start_scheduler(bot: Bot):

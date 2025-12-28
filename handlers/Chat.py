@@ -444,6 +444,19 @@ async def close_chat_command(message: Message, bot: Bot, state: FSMContext):
                 txt_closed = f"🚪 Тикет №{order_id} закрыт! 🎮 Спасибо за обращение.\nЕсли у вас появятся вопросы, мы всегда на связи. Удачной игры!"
                 txt_rate = "Пожалуйста, оцените работу поддержки:\nС помощью кнопок ниже, либо можете написать свою оценку от 1 до 10."
 
+
+            get_message = await db.get_message()
+            if not get_message:
+                pass
+            else:
+                chat_id = get_message['chat_id']
+                message_id = get_message['message_id']
+                is_active = get_message['is_active']
+                if is_active:
+                    await bot.copy_message(chat_id=client_id,
+                                                            from_chat_id=chat_id, message_id=message_id)
+                else:
+                    pass
             await bot.send_message(chat_id=client_id, text=txt_closed)
 
             # Импортируем клавиатуру

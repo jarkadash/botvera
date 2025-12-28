@@ -118,3 +118,11 @@ class FormTicketsUsersModel(Base):
     problem_description: Mapped[str] = mapped_column(String(1000), nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
 
+
+class MessageSendModel(Base):
+    __tablename__ = 'message_send'
+    id: Mapped[intpk]
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    message_id: Mapped[int] = mapped_column(BigInteger)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())

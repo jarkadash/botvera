@@ -3,11 +3,12 @@ import time
 import pytz
 from aiogram import Bot
 from dotenv import load_dotenv
-from sqlalchemy import select, delete, update, func
+from sqlalchemy import select, delete, update, func, Delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
-from sqlalchemy.sql.operators import exists
+from sqlalchemy.sql.coercions import expect
+from sqlalchemy.sql.operators import exists, truediv
 from Utils import get_calculated_period, filter_tickets_for_statistics, order_to_dict
 from database.models import *
 from aiogram.fsm.storage.redis import RedisStorage, DefaultKeyBuilder
@@ -558,7 +559,6 @@ class DataBase:
 
                 # Сохраняем username ДО любых операций с базой, которые могут закрыть сессию
                 support_username = user.username  # ЗАГРУЖАЕМ СЕЙЧАС!
-
 
                 # Проверяем роль и права по сервису
                 if user.role_id is None:
@@ -2047,8 +2047,7 @@ class DataBase:
             logger.error(f"Ошибка получения чата клиента: {e}", exc_info=True)
             return None
 
-
-    async def add_form_in_base(self,  order_id: int, name_game: str, name_cheat: str,
+    async def add_form_in_base(self, order_id: int, name_game: str, name_cheat: str,
                                problem_description: str, specifications: str):
         try:
             async with self.Session() as session:
@@ -2125,24 +2124,28 @@ class DataBase:
         Получает статистику по тикетам:
         - Новые тикеты (статус 'New')
         - В работе (статус 'At work')
-        - Общее количество за последние 24 часа
+        - Решенные за сегодня тикеты технической поддержки
+        - Решенные за сегодня тикеты HWID reset
         """
         try:
             async with self.Session() as session:
                 from datetime import datetime, timedelta
 
-                # Время 5 часов назад
-                twenty_four_hours_ago = datetime.utcnow() - timedelta(hours=5)
+                # Время начала сегодняшнего дня (для фильтрации "за сегодня")
+                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
-                # Новые тикеты (статус 'New')
+                # Время 24 часа назад (для общего отчета)
+                twenty_four_hours_ago = datetime.utcnow() - timedelta(hours=24)
+
+                # Новые тикеты (статус 'New') - за 24 часа
                 new_tickets_query = select(func.count(Orders.id)).where(
-                    Orders.status == 'new',
+                    Orders.status == 'New',
                     Orders.created_at >= twenty_four_hours_ago
                 )
                 new_tickets_result = await session.execute(new_tickets_query)
                 new_tickets_count = new_tickets_result.scalar() or 0
 
-                # Тикеты в работе (статус 'At work')
+                # Тикеты в работе (статус 'At work') - за 24 часа
                 at_work_tickets_query = select(func.count(Orders.id)).where(
                     Orders.status == 'at work',
                     Orders.created_at >= twenty_four_hours_ago
@@ -2150,17 +2153,121 @@ class DataBase:
                 at_work_tickets_result = await session.execute(at_work_tickets_query)
                 at_work_tickets_count = at_work_tickets_result.scalar() or 0
 
+                # **РЕШЕННЫЕ тикеты за СЕГОДНЯ по технической поддержке**
+                # Предполагаем, что service_name содержит "техническая поддержка" или похожее
+                tech_support_completed_query = select(func.count(Orders.id)).where(
+                    Orders.status.in_(['completed', 'closed']),  # Выберите ваш статус для "решено"
+                    Orders.service_name.ilike('%техническая помощь%'),  # ILIKE для регистронезависимого поиска
+                    Orders.completed_at >= today_start  # За сегодня
+                )
+                tech_support_completed_result = await session.execute(tech_support_completed_query)
+                tech_support_completed_count = tech_support_completed_result.scalar() or 0
 
-
+                # **РЕШЕННЫЕ тикеты за СЕГОДНЯ по HWID reset**
+                hwid_reset_completed_query = select(func.count(Orders.id)).where(
+                    Orders.status.in_(['completed', 'closed']),  # Выберите ваш статус для "решено"
+                    Orders.service_name.ilike('%HWID%reset%'),  # ILIKE для регистронезависимого поиска
+                    Orders.completed_at >= today_start  # За сегодня
+                )
+                hwid_reset_completed_result = await session.execute(hwid_reset_completed_query)
+                hwid_reset_completed_count = hwid_reset_completed_result.scalar() or 0
 
                 return {
                     'new_tickets': new_tickets_count,
                     'at_work_tickets': at_work_tickets_count,
-                    'period': '5 часа'
+                    'tech_support_completed_today': tech_support_completed_count,
+                    'hwid_reset_completed_today': hwid_reset_completed_count,
+                    'period': '24 часа'
                 }
 
         except Exception as e:
             logger.error(f"Ошибка получения статистики тикетов: {e}")
             return None
+
+    async def get_message(self):
+        """Получить информацию о сообщении с user_id из таблицы Users"""
+        try:
+            async with self.Session() as session:
+                # Получаем сообщение из MessageSendModel
+                message_result = await session.execute(select(MessageSendModel))
+                message = message_result.scalars().first()
+
+                if not message:
+                    return None
+
+                # Получаем пользователя из таблицы Users по user_id (foreign key)
+                user_result = await session.execute(
+                    select(Users).where(Users.id == message.user_id)
+                )
+                user = user_result.scalars().first()
+
+                if not user:
+                    logger.error(f"Пользователь с id {message.user_id} не найден")
+                    return None
+
+                # Возвращаем словарь с нужными данными
+                return {
+                    'chat_id': user.user_id,  # user_id из таблицы Users (Telegram ID)
+                    'message_id': message.message_id,  # ID сообщения в Telegram
+                    'is_active': message.is_active,
+                    'created_at': message.created_at,
+                    'db_id': message.id  # ID в вашей базе
+                }
+
+        except Exception as e:
+            logger.error(f"Ошибка получения сообщения: {e}")
+            return None
+        finally:
+            await session.close()
+
+    async def update_message_status(self, message_id: int, is_active: bool):
+        """Обновить статус активности сообщения"""
+        async with self.Session() as session:
+            await session.execute(
+                update(MessageSendModel)
+                .where(MessageSendModel.id == message_id)
+                .values(is_active=is_active)
+            )
+            await session.commit()
+
+    async def delete_message(self, message_id: int):
+        """Удалить сообщение"""
+        async with self.Session() as session:
+            message = await session.get(MessageSendModel, message_id)
+            if message:
+                await session.delete(message)
+                await session.commit()
+
+    async def add_message_in_db(self, message_id: int, user_id: int):
+        """Обновить/создать единственное сообщение в базе"""
+        try:
+            async with self.Session() as session:
+                await session.execute(Delete(MessageSendModel))
+
+                user_result = await session.execute(
+                    select(Users).where(Users.user_id == user_id)
+                )
+                user = user_result.scalars().first()
+
+                if not user:
+                    logger.error(f"Пользователь {user_id} не найден")
+                    return False
+
+                new_message = MessageSendModel(
+                    message_id=message_id,
+                    user_id=user.id,
+                    is_active=True
+                )
+
+                session.add(new_message)
+                await session.commit()
+
+                logger.info(f"Сообщение обновлено. ID: {message_id}")
+                return True
+
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении сообщения в базе: {e}")
+            await session.rollback()
+            return False
         finally:
             await session.close()

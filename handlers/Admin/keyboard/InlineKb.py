@@ -21,6 +21,9 @@ admin_panel = InlineKeyboardMarkup(
           InlineKeyboardButton(text='Выгрузка', callback_data='export')
         ],
         [
+          InlineKeyboardButton(text='Сообщение', callback_data='message_send'),
+        ],
+        [
             InlineKeyboardButton(text='📸 Режим Медиа', callback_data='start_media'),
         ],
         [
@@ -95,6 +98,25 @@ admin_media_menu_kb = InlineKeyboardMarkup(
         ],
         [
           InlineKeyboardButton(text='🔙 назад', callback_data='back_menu'),
+        ],
+    ]
+)
+
+admin_message_settings_kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text='Задать сообщение', callback_data="messageAdd")
+        ],
+        [
+            InlineKeyboardButton(text='🔙 назад', callback_data='back_menu'),
+        ],
+    ]
+)
+
+admin_back_kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text='🔙 назад', callback_data='back_menu'),
         ],
     ]
 )

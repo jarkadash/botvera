@@ -18,10 +18,11 @@ from core.dictionary import *
 from handlers.Admin.keyboard.InlineKb import *
 from config import *
 from handlers.export import *
+
 db = DataBase()
 DATE_FORMAT = "%d.%m.%y"
 
-#Временно, но скорее всего постоянно
+# Временно, но скорее всего постоянно
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
@@ -33,8 +34,9 @@ from aiogram.filters import Filter
 from sqlalchemy import select
 from database.models import Users, Roles
 
-
 admin_router = Router()
+
+
 # 🔐 Фильтр доступа по роли admin (для всех сообщений)
 class IsAdmin(Filter):
     async def __call__(self, message: Message) -> bool:
@@ -46,6 +48,7 @@ class IsAdmin(Filter):
             )
             row = result.first()
             return row is not None and row[1] == "admin"
+
 
 # 🔐 Фильтр доступа по роли admin (для всех callback-кнопок)
 class IsAdminCallback(Filter):
@@ -59,11 +62,14 @@ class IsAdminCallback(Filter):
             role_name = result.scalar_one_or_none()
             return role_name == "admin"
 
+
+class MessageAddShema(StatesGroup):
+    message = State()
+
+
 # ⛓️ Подключаем фильтры к admin_router
 admin_router.message.filter(IsAdmin())
 admin_router.callback_query.filter(IsAdminCallback())
-
-
 
 
 class AddRoles(StatesGroup):
@@ -84,11 +90,14 @@ class AddUserRole(StatesGroup):
     Username = State()
     role_user = State()
 
+
 class StartMailing(StatesGroup):
     text_mailing = State()
 
+
 class PaymentStates(StatesGroup):
     awaiting_new_rate = State()
+
 
 CATEGORY_MAP = {
     "technical_support": "Техническая помощь / Technical Support",
@@ -98,7 +107,6 @@ CATEGORY_MAP = {
     "get_key": "Получить Ключ / Get a key",
     "bonus_per_50": "Бонус за каждые 50 тикетов"
 }
-
 
 
 @admin_router.message(Command(commands=['admin']), F.chat.type == "private")
@@ -131,6 +139,7 @@ async def back_menu(call: CallbackQuery, state: FSMContext):
     logger.info(Fore.BLUE + f'Пользователь {call.from_user.username} id: {call.from_user.id} '
                             f'выбрал Назад' + Style.RESET_ALL)
     try:
+        await state.clear()
         await call.message.edit_text(text='Выберите действие: ', reply_markup=admin_panel)
     except Exception as e:
         logger.error(f'Ошибка в команде /back_menu {e}')
@@ -231,8 +240,7 @@ async def add_service(message: Message, state: FSMContext, bot: Bot):
     try:
         await state.update_data(service_name=message.text)
         sent_message = await message.answer(text='Выберите роль или роли которые будут иметь доступ к услуге'
-                                  'Пример ввода (1,2,3)', reply_markup=keyboard)
-
+                                                 'Пример ввода (1,2,3)', reply_markup=keyboard)
 
         await state.update_data(message_id=sent_message.message_id)
         await state.set_state(AddService.role_service)
@@ -466,11 +474,11 @@ async def start_del_role_user(call: CallbackQuery, state: FSMContext, bot: Bot):
     if result is True:
         await call.message.answer(text='Роль удалена', reply_markup=admin_panel)
         message_text = ('🔔 Уведомление 🔔\n\n'
-                   '📢 Вы сняты с должности.'
-                   '🙏 Благодарим вас за проделанную работу! Ваш вклад не остался незамеченным.'
-                   '✨ Желаем вам успехов в будущем, новых достижений и всего самого доброго! 🌟'
-                   'С уважением, команда 🦊GAMEBREAKER 🤝'
-        )
+                        '📢 Вы сняты с должности.'
+                        '🙏 Благодарим вас за проделанную работу! Ваш вклад не остался незамеченным.'
+                        '✨ Желаем вам успехов в будущем, новых достижений и всего самого доброго! 🌟'
+                        'С уважением, команда 🦊GAMEBREAKER 🤝'
+                        )
         await bot.send_message(chat_id=user_id, text=message_text)
         await state.clear()
     else:
@@ -507,6 +515,7 @@ async def start_export(call: CallbackQuery, state: FSMContext, bot: Bot):
     await call.message.delete()
     await export_data(call, bot)
 
+
 # --- Кнопки подтверждения ---
 confirm_mailing_kb = InlineKeyboardMarkup(
     inline_keyboard=[
@@ -514,10 +523,13 @@ confirm_mailing_kb = InlineKeyboardMarkup(
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_mailing")]
     ]
 )
+
+
 # Админ нажал "Начать рассылку"
 @admin_router.callback_query(F.data.startswith('malling_message'))
 async def start_mailing(call: CallbackQuery, state: FSMContext, bot: Bot):
-    logger.info(Fore.BLUE + f'Пользователь {call.from_user.username} id: {call.from_user.id} хочет начать рассылку' + Style.RESET_ALL)
+    logger.info(
+        Fore.BLUE + f'Пользователь {call.from_user.username} id: {call.from_user.id} хочет начать рассылку' + Style.RESET_ALL)
 
     # 🧹 Очистим FSM
     await state.clear()
@@ -544,7 +556,6 @@ async def start_mailing(call: CallbackQuery, state: FSMContext, bot: Bot):
     await state.set_state(StartMailing.text_mailing)
 
 
-
 # Получено сообщение, ждём подтверждения
 @admin_router.message(StartMailing.text_mailing)
 async def receive_mailing_text(message: Message, state: FSMContext, bot):
@@ -556,6 +567,7 @@ async def receive_mailing_text(message: Message, state: FSMContext, bot):
         434791099,
         f"⚠️ Пользователь @{user.username or 'без username'} (id: {user.id}) отправил сообщение для рассылки и ожидает подтверждения."
     )
+
 
 # Подтверждена рассылка
 @admin_router.callback_query(F.data == "confirm_real_send")
@@ -634,6 +646,7 @@ async def do_real_mailing(call: CallbackQuery, state: FSMContext, bot):
         f"✉ Отправитель: @{call.from_user.username or 'без username'} ({call.from_user.id})"
     )
 
+
 # Отменена рассылка
 @admin_router.callback_query(F.data == "cancel_mailing")
 async def cancel_mailing(call: CallbackQuery, state: FSMContext):
@@ -645,8 +658,6 @@ async def cancel_mailing(call: CallbackQuery, state: FSMContext):
 
     await state.clear()
     await call.message.edit_text("❌ Рассылка отменена.")
-
-
 
 
 @admin_router.callback_query(F.data.startswith('start_media'))
@@ -672,6 +683,7 @@ async def show_users_for_rate_edit(callback: CallbackQuery):
     )
     await callback.message.edit_text("Выберите пользователя для настройки ставок:", reply_markup=kb)
 
+
 @admin_router.callback_query(F.data.startswith("edit_rate:"))
 async def show_categories(callback: CallbackQuery):
     user_id = int(callback.data.split(":")[1])
@@ -682,6 +694,7 @@ async def show_categories(callback: CallbackQuery):
                         ] + [[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_user_list")]]
     )
     await callback.message.edit_text("Выберите категорию для изменения ставки:", reply_markup=kb)
+
 
 @admin_router.callback_query(F.data.startswith("set_rate:"))
 async def prompt_new_rate(callback: CallbackQuery, state: FSMContext):
@@ -701,6 +714,7 @@ async def prompt_new_rate(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(PaymentStates.awaiting_new_rate)
 
+
 @admin_router.callback_query(F.data == "back_to_user_list")
 async def back_to_user_list(callback: CallbackQuery):
     users = await db.get_users_with_roles_for_rates()
@@ -715,6 +729,7 @@ async def back_to_user_list(callback: CallbackQuery):
                         ] + [[InlineKeyboardButton(text="⬅️ Назад", callback_data="back_menu")]]
     )
     await callback.message.edit_text("Выберите пользователя:", reply_markup=keyboard)
+
 
 @admin_router.message(PaymentStates.awaiting_new_rate)
 async def save_new_rate(message: Message, state: FSMContext):
@@ -984,3 +999,131 @@ async def all_stats_command(message: Message, bot: Bot):
     except Exception as e:
         logger.error(f"[ALLSTATS ERROR] {e}", exc_info=True)
         await message.answer("❗ Ошибка при обработке команды /allstats.")
+
+
+@admin_router.callback_query(F.data.startswith("message_send"))
+async def start_message_send(call: CallbackQuery, bot: Bot):
+    logger.info(f'Пользователь зашел в настройку сообщений!')
+    message_info = await db.get_message()
+
+    if not message_info:
+        await call.message.edit_text("Сообщений в базе еще нет, вы можете создать новое",
+                                     reply_markup=admin_message_settings_kb)
+        return
+
+        # Берем первое/последнее сообщение (в зависимости от вашей логики)
+        # Например, берем последнее активное сообщение
+
+    try:
+        chat_id = message_info['chat_id']
+        message_id = message_info['message_id']
+        # Получаем сообщение по его ID
+        temp_message = await bot.send_message(chat_id=chat_id, text="temp", reply_to_message_id=message_id)
+        reply_message = temp_message.reply_to_message
+        await temp_message.delete()
+        text = reply_message.text
+
+        message_content = reply_message.text or reply_message.caption or "Нет текста"
+        truncated_text = message_content[:200] + "..." if len(message_content) > 200 else message_content
+
+    except Exception as e:
+        logger.error(f"Не удалось получить сообщение из Telegram: {e}")
+        message_content = "Не удалось загрузить текст сообщения"
+        truncated_text = "Текст недоступен"
+
+    is_active = message_info['is_active']
+        # Формируем текст с содержанием сообщения
+    message_text = (
+        f"📝 **Информация о сообщении:**\n"
+        f"• Статус: {'✅ Активно' if is_active else '❌ Неактивно'}\n"
+        f"**Текст сообщения:**\n"
+        f"`{truncated_text}`"
+    )
+
+    # Создаем клавиатуру с кнопками управления
+    keyboard_buttons = []
+    db_id = message_info['db_id']
+    if is_active:
+        # Если сообщение активно - показываем кнопку деактивации
+        keyboard_buttons.append([
+            InlineKeyboardButton(
+                text="❌ Деактивировать",
+                callback_data=f"deactivate_msg_{db_id}"
+            )
+        ])
+    else:
+        # Если сообщение неактивно - показываем кнопку активации
+        keyboard_buttons.append([
+            InlineKeyboardButton(
+                text="✅ Активировать",
+                callback_data=f"activate_msg_{db_id}"
+            )
+        ])
+
+    # Добавляем остальные кнопки
+    keyboard_buttons.extend([
+        [
+            InlineKeyboardButton(
+                text="🗑 Удалить",
+                callback_data=f"delete_msg_{db_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔙 Назад",
+                callback_data="back_menu"
+            )
+        ]
+    ])
+
+    message_kb = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+
+    # Отправляем/редактируем сообщение с информацией
+    await call.message.edit_text(
+        message_text,
+        reply_markup=message_kb,
+        parse_mode="Markdown"
+    )
+
+
+@admin_router.callback_query(F.data.startswith("activate_msg_"))
+async def activate_message(call: CallbackQuery, bot: Bot):
+    message_id = int(call.data.split("_")[-1])
+    await db.update_message_status(message_id, is_active=True)
+    await call.answer("✅ Сообщение активировано!")
+    await start_message_send(call, bot)
+
+@admin_router.callback_query(F.data.startswith("deactivate_msg_"))
+async def deactivate_message(call: CallbackQuery, bot: Bot):
+    message_id = int(call.data.split("_")[-1])
+    await db.update_message_status(message_id, is_active=False)
+    await call.answer("❌ Сообщение деактивировано!")
+    await start_message_send(call, bot)
+
+@admin_router.callback_query(F.data.startswith("delete_msg_"))
+async def delete_message(call: CallbackQuery, bot: Bot):
+    message_id = int(call.data.split("_")[-1])
+    await db.delete_message(message_id)
+    await call.answer("🗑 Сообщение удалено!")
+    await start_message_send(call, bot)
+
+
+@admin_router.callback_query(F.data.startswith("messageAdd"))
+async def start_add_message(call: CallbackQuery, state: FSMContext):
+    logger.info(f"Пользователь задает новое сообщение")
+    await call.message.delete()
+    await call.message.answer("Введите текст сообщения", reply_markup=admin_back_kb)
+    await state.set_state(MessageAddShema.message)
+
+@admin_router.message(MessageAddShema.message)
+async def get_message(message: Message, state: FSMContext):
+    logger.info(f"Пользователь задал новое сообщение: {message.text}")
+    new_message_id = message.message_id
+    user_id = message.from_user.id
+    add_message_in_db = await db.add_message_in_db(new_message_id, user_id)
+    if add_message_in_db is False:
+        await message.answer("Извините произошла ошибка при сохранения сообщения в базу(Сообщите разработчику)!")
+        return
+
+    await message.answer("Сообщение успешно сохранено и включенно", reply_markup=admin_back_kb)
+    await state.clear()

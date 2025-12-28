@@ -413,6 +413,7 @@ async def unpin_specific_message(bot: Bot, chat_id: int, message_id: int):
 @start_router.callback_query(F.data.startswith('remove_order:'))
 async def remove_order(call: CallbackQuery, state: FSMContext, bot: Bot):
     try:
+        await call.message.delete()
         lang = await _get_lang(call.from_user.id)
         logger.info(f'📢 Получен запрос на удаление тикета от пользователя {call.from_user.username} (ID: {call.from_user.id})')
         order_id = int(call.data.split(':')[1])
@@ -431,10 +432,10 @@ async def remove_order(call: CallbackQuery, state: FSMContext, bot: Bot):
                 else "Вы не можете отменить свой тикет, если он уже принят или закрыт"
             )
             try:
-                await call.message.edit_caption(txt)
+                await call.answer(txt, show_alert=True)
             except Exception:
                 try:
-                    await call.message.edit_text(txt)
+                    await call.answer(txt, show_alert=True)
                 except Exception:
                     await call.answer(txt, show_alert=True)
             return
