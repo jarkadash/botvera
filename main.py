@@ -64,7 +64,7 @@ async def start():
         await bot.delete_webhook(drop_pending_updates=True)
         await db.create_db()
         await set_commands(bot)
-        asyncio.create_task(check_tickets_periodically(bot, 3))
+        asyncio.create_task(check_tickets_periodically(bot, 25))
         group_manager.set_bot(bot)
         await dp.start_polling(bot, skip_updates=True)
     finally:
@@ -181,7 +181,7 @@ async def start_check(bot: Bot):
 
 
 # Простой планировщик в main.py
-async def check_tickets_periodically(bot: Bot, interval_minutes: int = 3):
+async def check_tickets_periodically(bot: Bot, interval_minutes: int = 25):
     """Периодически проверяет статистику тикетов"""
     logger.info(f"Запущена периодическая проверка тикетов каждые {interval_minutes} минут")
 
