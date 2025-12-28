@@ -2154,9 +2154,8 @@ class DataBase:
                 at_work_tickets_count = at_work_tickets_result.scalar() or 0
 
                 # **РЕШЕННЫЕ тикеты за СЕГОДНЯ по технической поддержке**
-                # Предполагаем, что service_name содержит "техническая поддержка" или похожее
                 tech_support_completed_query = select(func.count(Orders.id)).where(
-                    Orders.status.in_(['completed', 'closed']),  # Выберите ваш статус для "решено"
+                    Orders.status.in_(['completed', 'closed']),  # Статусы для "решено"
                     Orders.service_name.ilike('%техническая помощь%'),  # ILIKE для регистронезависимого поиска
                     Orders.completed_at >= today_start  # За сегодня
                 )
@@ -2165,19 +2164,23 @@ class DataBase:
 
                 # **РЕШЕННЫЕ тикеты за СЕГОДНЯ по HWID reset**
                 hwid_reset_completed_query = select(func.count(Orders.id)).where(
-                    Orders.status.in_(['completed', 'closed']),  # Выберите ваш статус для "решено"
+                    Orders.status.in_(['completed', 'closed']),  # Статусы для "решено"
                     Orders.service_name.ilike('%HWID%reset%'),  # ILIKE для регистронезависимого поиска
                     Orders.completed_at >= today_start  # За сегодня
                 )
                 hwid_reset_completed_result = await session.execute(hwid_reset_completed_query)
                 hwid_reset_completed_count = hwid_reset_completed_result.scalar() or 0
 
+                # Правильное вычисление общего количества
+                total_count = tech_support_completed_count + hwid_reset_completed_count
+
                 return {
                     'new_tickets': new_tickets_count,
                     'at_work_tickets': at_work_tickets_count,
                     'tech_support_completed_today': tech_support_completed_count,
                     'hwid_reset_completed_today': hwid_reset_completed_count,
-                    'period': '24 часа'
+                    'period': '24 часа',
+                    'total_tickets': total_count
                 }
 
         except Exception as e:

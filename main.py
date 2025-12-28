@@ -200,7 +200,9 @@ async def check_tickets_periodically(bot: Bot, interval_minutes: int = 25):
                     f"⚙️ В работе (за {statistics['period']}): {statistics['at_work_tickets']}\n"
                     f"\n<b>Завершено сегодня:</b>\n"
                     f"🔧 Тех. помощь: {statistics['tech_support_completed_today']}\n"
-                    f"🔄 HWID reset: {statistics['hwid_reset_completed_today']}\n"
+                    f"🔄 HWID reset: {statistics['hwid_reset_completed_today']}\n\n"
+                    f"Общие количество: {statistics['total_tickets']}\n\n"
+
                 )
 
                 # Отправляем админам
