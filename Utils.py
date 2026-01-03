@@ -24,15 +24,29 @@ def get_calculated_period(today=None):
     if today is None:
         today = datetime.now()
 
-    if 11 <= today.day <= 25:
-        start_date = today.replace(day=11)
-        end_date = today.replace(day=25)
+    year = today.year
+    month = today.month
+    day = today.day
+
+    if 11 <= day <= 25:
+        start_date = datetime(year, month, 11)
+        end_date = datetime(year, month, 25)
+
+    elif day >= 26:
+        start_date = datetime(year, month, 26)
+
+        if month == 12:
+            end_date = datetime(year + 1, 1, 10)
+        else:
+            end_date = datetime(year, month + 1, 10)
 
     else:
-        start_date = today.replace(day=26)
+        if month == 1:
+            start_date = datetime(year - 1, 12, 26)
+        else:
+            start_date = datetime(year, month - 1, 26)
 
-        next_month = (start_date.replace(day=1) + timedelta(days=32)).replace(day=1)
-        end_date = next_month.replace(day=10)
+        end_date = datetime(year, month, 10)
 
     if end_date < start_date:
         raise ValueError(
@@ -40,6 +54,7 @@ def get_calculated_period(today=None):
         )
 
     return start_date.date(), end_date.date()
+
 
 
 def order_to_dict(order) -> dict:
